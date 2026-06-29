@@ -11,8 +11,8 @@ set -euo pipefail
 if command -v apt-get >/dev/null; then
   sudo apt-get update
   sudo apt-get install -y \
-    libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
-    build-essential libssl-dev libgtk-3-dev libayatana-appindicator3-dev curl
+    libwebkit2gtk-4.1-dev librsvg2-dev patchelf build-essential curl wget file \
+    libxdo-dev libssl-dev libgtk-3-dev libayatana-appindicator3-dev
 fi
 
 # 2. Toolchains (skip if already installed).
