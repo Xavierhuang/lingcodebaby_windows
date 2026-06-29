@@ -1,0 +1,79 @@
+# Cross-platform release: builds signed Windows (x64 + arm64) and Linux
+# (deb/rpm/AppImage) bundles, then publishes a GitHub Release with a merged
+# updater manifest (latest.json).
+#
+# Assumes this repo's root contains the Tauri app (package.json + src-tauri/).
+# If the app lives in a subfolder, set `projectPath` on the tauri-action step.
+#
+# Required repo secrets (Settings → Secrets and variables → Actions):
+#   TAURI_SIGNING_PRIVATE_KEY           contents of ~/.lingcodebaby-updater.key
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  the key password (lcb-updater-2026)
+# GITHUB_TOKEN is provided automatically.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04           # Linux x64 (.deb / .rpm / AppImage)
+            args: ""
+            rust-targets: ""
+          - platform: windows-latest         # Windows x64 (NSIS)
+            args: "--target x86_64-pc-windows-msvc"
+            rust-targets: "x86_64-pc-windows-msvc"
+          - platform: windows-latest         # Windows arm64 (NSIS)
+            args: "--target aarch64-pc-windows-msvc"
+            rust-targets: "aarch64-pc-windows-msvc"
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf build-essential libssl-dev libgtk-3-dev \
+            libayatana-appindicator3-dev
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build + publish release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          # projectPath: "."          # set if the app is in a subfolder
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
+          releaseName: "LingCodeBaby v__VERSION__"
+          releaseBody: "See the assets to download and install."
+          releaseDraft: true
+          prerelease: false
+          includeUpdaterJson: true
+          args: ${{ matrix.args }}

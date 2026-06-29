@@ -1,0 +1,22 @@
+# dependencies
+node_modules/
+
+# frontend build output
+dist/
+
+# Rust / Tauri build output (gigabytes)
+src-tauri/target/
+
+# updater signing keys / secrets (never commit)
+*.key
+*.key.pub
+.env
+.env.*
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# logs
+*.log
+npm-debug.log*
