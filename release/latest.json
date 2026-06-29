@@ -1,7 +1,7 @@
-﻿{
+{
     "version":  "1.0.0",
-    "notes":  "LingCodeBaby 1.0.0 - cross-platform IDE with Claude chat, cloud deploy, and auto-update.",
-    "pub_date":  "2026-06-29T17:04:47Z",
+    "notes":  "LingCodeBaby 1.0.0",
+    "pub_date":  "2026-06-29T17:32:03Z",
     "platforms":  {
                       "windows-x86_64":  {
                                              "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTdzJ0TGVwR284aFA5QTFWb2RDcUdPM0MzUnNVeHdSY1E0OUdZemRUQjY4MWlSRXRJQWZadGI5eE5kaitxL1BNNzRTZVBMZEM0Z0NLL1ZHUUNBZDBmd1VRSHNqT1g2YVEwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzgyNzUyNjQwCWZpbGU6TGluZ0NvZGVCYWJ5XzEuMC4wX3g2NC1zZXR1cC5leGUKNmY1NUoyalFUMHRDV0t2cEFXWmV4YkhvM2gzQ1liTXVnVFNFWkVCTmlCanNJekl5cmhkRGlRQUZNL2s0aXBQMEFKbVZxS3BmL0FYL3pVQUxKOTJ3QVE9PQo=",

@@ -47,5 +47,8 @@ if ($platforms.Count -eq 0) { throw "No signed installers found for version $Ver
 
 $manifest = [ordered]@{ version = $Version; notes = $Notes; pub_date = $PubDate; platforms = $platforms }
 $outPath  = Join-Path $PSScriptRoot "latest.json"
-$manifest | ConvertTo-Json -Depth 6 | Out-File $outPath -Encoding utf8
+# Write UTF-8 WITHOUT a BOM — a BOM breaks JSON.parse (e.g. in tauri-action's
+# updater-manifest merge), which silently drops platforms from latest.json.
+$json = $manifest | ConvertTo-Json -Depth 6
+[System.IO.File]::WriteAllText($outPath, $json, (New-Object System.Text.UTF8Encoding($false)))
 Write-Host ("Wrote {0}  (version {1}, {2} platform(s))" -f $outPath, $Version, $platforms.Count)
