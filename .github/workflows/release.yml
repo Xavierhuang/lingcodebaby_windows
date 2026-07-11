@@ -7,7 +7,7 @@
 #
 # Required repo secrets (Settings → Secrets and variables → Actions):
 #   TAURI_SIGNING_PRIVATE_KEY           contents of ~/.lingcodebaby-updater.key
-#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  the key password (lcb-updater-2026)
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  the key password
 # GITHUB_TOKEN is provided automatically.
 
 name: release
