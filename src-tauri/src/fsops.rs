@@ -5,7 +5,67 @@
 
 use serde::Serialize;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
+
+// --- LingCode Cloud backend wiring -----------------------------------------
+
+/// Stable per-workspace project key, IDENTICAL to the Mac app + full app
+/// (LingCodeCloudMCPSetup.projectKey) so the same folder resolves the same
+/// managed backend everywhere: "proj_" + first 20 chars of lowercase-hex
+/// SHA256(standardized path). We deliberately do NOT `canonicalize` (which
+/// resolves symlinks): NSURL.standardizedFileURL / stringByStandardizingPath on
+/// the Mac side leave symlinks intact (e.g. /tmp stays /tmp, not /private/tmp),
+/// so matching that means only trimming a trailing separator.
+pub fn cloud_project_key(cwd: &str) -> String {
+    let path = cwd.trim_end_matches(|c| c == '/' || c == '\\');
+    let mut hasher = Sha256::new();
+    hasher.update(path.as_bytes());
+    let hex: String = hasher.finalize().iter().map(|b| format!("{:02x}", b)).collect();
+    format!("proj_{}", &hex[..20])
+}
+
+/// Wire the LingCode Cloud managed backend into `<cwd>/.mcp.json` so the
+/// embedded `claude` CLI can provision + use a Postgres/auth/storage/functions
+/// backend via the `lingcode-cloud` MCP tools. Uses the CLI's native remote-HTTP
+/// MCP transport pointed straight at the account endpoint — no bundled runtime
+/// or proxy. The caller passes a token only when signed in; the token is NOT
+/// written to disk — the header references `${LINGCODE_CLOUD_TOKEN}`, which the
+/// CLI expands from the environment the agent is spawned with. Additive +
+/// idempotent: merges into any existing `.mcp.json` without clobbering other
+/// servers.
+pub fn scaffold_cloud_backend(cwd: &str) {
+    let mcp_url = format!("{}/api/cloud/account/mcp", crate::deploy::deploy_api_base());
+    let entry = json!({
+        "type": "http",
+        "url": mcp_url,
+        "headers": {
+            "Authorization": "Bearer ${LINGCODE_CLOUD_TOKEN}",
+            "x-lingcode-project": cloud_project_key(cwd),
+        }
+    });
+
+    let path = Path::new(cwd).join(".mcp.json");
+    let mut root: Value = std::fs::read(&path)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}));
+    // Safe: root is guaranteed an object here.
+    let obj = match root.as_object_mut() {
+        Some(o) => o,
+        None => return,
+    };
+    let servers = obj.entry("mcpServers").or_insert_with(|| json!({}));
+    if let Some(map) = servers.as_object_mut() {
+        map.insert("lingcode-cloud".to_string(), entry);
+    } else {
+        return; // pre-existing mcpServers is malformed; leave it alone
+    }
+    if let Ok(bytes) = serde_json::to_vec_pretty(&root) {
+        let _ = std::fs::write(&path, bytes);
+    }
+}
 
 #[derive(Serialize)]
 pub struct DirEntry {

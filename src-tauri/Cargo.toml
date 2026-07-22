@@ -30,6 +30,7 @@ dirs = "5"
 walkdir = "2"
 percent-encoding = "2"
 uuid = { version = "1", features = ["v4"] }
+sha2 = "0.10"
 
 # keyring features are platform-specific; scope them so Windows doesn't pull the
 # Linux secret-service (dbus) backend, and vice-versa.

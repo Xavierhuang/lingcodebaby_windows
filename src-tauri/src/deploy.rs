@@ -19,6 +19,12 @@ fn api_base() -> String {
     std::env::var("LINGCODE_API_BASE").unwrap_or_else(|_| "https://lingcode.dev".to_string())
 }
 
+/// LingModel proxy base URL for `ANTHROPIC_BASE_URL` (the Anthropic SDK/CLI
+/// appends `/v1/messages`). Mirrors the main app's `lingModelAnthropicBaseURL`.
+pub fn lingmodel_anthropic_base_url() -> String {
+    format!("{}/api/inference/anthropic", api_base())
+}
+
 fn config_path(folder: &str) -> PathBuf {
     Path::new(folder).join(".lingcodedeploy.json")
 }

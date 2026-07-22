@@ -5,7 +5,10 @@ interface Entry { el: HTMLElement; clean: boolean; }
 export class ChatPanel {
   getCwd: () => string | null = () => null;
   onFilesModified: () => void = () => {};
-  getModel: () => string = () => "sonnet";
+  getModel: () => string = () => "lingmodel";
+  // Gate a send on required auth (e.g. LingModel needs a LingCode sign-in).
+  // Return false to abort the send. Set from main.ts.
+  ensureAuth: (model: string) => Promise<boolean> = async () => true;
   playSounds = true;
   private showThinking = false;
   private session: string | null = null;
@@ -78,6 +81,10 @@ export class ChatPanel {
     if (!message || this.busy) return;
     const cwd = this.getCwd();
     if (!cwd) { this.append("Open a folder first to chat with Claude about your project.", "note", true); return; }
+
+    // Gate before echoing the message — e.g. LingModel requires a LingCode
+    // sign-in; this may open the sign-in flow. Abort silently if it fails/cancels.
+    if (!(await this.ensureAuth(this.getModel()))) return;
 
     this.clearOptions();
     this.appendRole("You", message);
