@@ -5,7 +5,7 @@ import { CodeEditor } from "./editor";
 import { ChatPanel } from "./chat";
 import { runDeploy } from "./deploy";
 import { checkForUpdates } from "./updater";
-import { alertDialog, promptText, tokenPrompt } from "./ui";
+import { alertDialog, promptText } from "./ui";
 import { showEndpointSheet } from "./endpoint";
 import { showOnboarding, showOnboardingIfNeeded } from "./onboarding";
 import { listen } from "@tauri-apps/api/event";
@@ -68,17 +68,9 @@ let folder: string | null = null;
 // ---- wiring ----
 chat.getCwd = () => folder;
 chat.getModel = () => currentModel;
-// LingModel routes through the LingCode proxy and needs a LingCode sign-in.
-// Reuse the same device-flow sign-in modal the deploy flow uses.
-chat.ensureAuth = async (model: string) => {
-  if (model !== "lingmodel") return true;
-  if (await api.deployGetSavedToken()) return true;
-  const tok = await tokenPrompt(
-    () => api.deploySignin(),
-    "Sign in to LingCode to use LingModel."
-  );
-  return !!tok;
-};
+// (LingModel sign-in is now handled by the first-run onboarding gate in
+// onboarding.ts — no per-send auth check needed here. The dead `chat.ensureAuth`
+// assignment that used to live here was write-only; nothing in ChatPanel read it.)
 chat.onFilesModified = async () => {
   await tree.refreshAll();
   if (currentFile) await reloadCurrentFromDisk();
