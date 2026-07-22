@@ -28,12 +28,28 @@ Update the version in **all three** files so they match:
 
 ## 2. Build the signed installers
 
-With the signing env vars set (step 0):
+**First** freeze the bundled Quinny CLI so `tauri build` picks it up via
+`bundle.resources → binaries/quinny/**/*`:
+```powershell
+pwsh -File scripts\build-quinny-windows.ps1
+```
+This installs PyInstaller + quinny into a temp venv, freezes an onedir bundle,
+and drops `quinny.exe` + `_internal\` into `src-tauri\binaries\quinny\`. Skip it
+only if you're intentionally shipping the app without Quinny (locate() returns
+None, all Quinny UI surfaces a "not found" alert). Env vars:
+- `$env:QUINNY_SOURCE` — path to a checkout of the patched Q/ tree that carries
+  the WAF-neutral User-Agent + `ANTHROPIC_AUTH_TOKEN` support. Without it, the
+  script `pip install quinny` from PyPI — safe only once those patches ship
+  upstream. See `src-tauri/binaries/quinny/README.md` for the full context.
+- `$env:PYTHON` — override the python executable (default: `python`).
+
+**Then** build the Tauri installers with the signing env vars from step 0:
 ```powershell
 cd desktop
 # x64 — most Windows PCs
 npm run tauri build -- --target x86_64-pc-windows-msvc
-# arm64 — Windows-on-ARM
+# arm64 — Windows-on-ARM (reuses the x64 quinny.exe under WoA x64 emulation;
+# PyInstaller can't cross-freeze to native arm64 from x64).
 npm run tauri build -- --target aarch64-pc-windows-msvc
 ```
 Each produces, under `src-tauri/target/<triple>/release/bundle/nsis/`:
@@ -83,8 +99,9 @@ The cert must be in the Windows certificate store, or use
 ## Linux build (run on Linux or WSL — not possible from Windows)
 
 Linux bundles link against `webkit2gtk`, so they must be built on a Linux host.
-A helper script installs the deps and builds:
+Freeze the Linux Quinny binary first, then build:
 ```bash
+./scripts/build-quinny-linux.sh
 TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.lingcodebaby-updater.key)" \
 TAURI_SIGNING_PRIVATE_KEY_PASSWORD="<YOUR_KEY_PASSWORD>" \
 ./release/build-linux.sh
@@ -106,12 +123,19 @@ Setup (one-time):
    tauri-action step).
 2. Add repo secrets: `TAURI_SIGNING_PRIVATE_KEY` (contents of the updater key
    file) and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
+3. **Optional:** `QUINNY_SOURCE_REPO` — a git URL of a Quinny fork carrying the
+   WAF-neutral User-Agent + `ANTHROPIC_AUTH_TOKEN` patches. When set, CI clones
+   it and freezes from there; when empty, CI freezes from stock PyPI (only safe
+   once the patches are upstream).
 
 Release: bump the version (step 1), then push a tag:
 ```bash
 git tag v1.0.1 && git push origin v1.0.1
 ```
-CI builds all targets, attaches them to a draft release, and generates
-`latest.json`. Publish the draft. If your updater endpoint stays
-`https://lingcode.dev/lingcodebaby/latest.json`, copy the release's `latest.json`
-+ installers there (or repoint the endpoint at the GitHub release URLs).
+CI freezes Quinny natively per platform (Windows x64, Linux x64) into
+`src-tauri/binaries/quinny/`, then builds Tauri, attaches all installers to a
+draft release, and generates `latest.json`. Windows arm64 reuses the x64
+`quinny.exe` (WoA runs it under x64 emulation). Publish the draft. If your
+updater endpoint stays `https://lingcode.dev/lingcodebaby/latest.json`, copy
+the release's `latest.json` + installers there (or repoint the endpoint at the
+GitHub release URLs).

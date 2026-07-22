@@ -1,5 +1,5 @@
 import { api, DirEntry } from "./api";
-import { promptText, confirmDialog, alertDialog, contextMenu } from "./ui";
+import { promptText, confirmDialog, alertDialog, contextMenu, MenuAction } from "./ui";
 
 interface TreeNode {
   entry: DirEntry;
@@ -140,7 +140,8 @@ export class FileTree {
 
   private showMenu(node: TreeNode, x: number, y: number) {
     const dirOf = node.entry.is_dir ? node.entry.path : this.parentOf(node.entry.path);
-    contextMenu(x, y, [
+    const isQuinnyFile = !node.entry.is_dir && node.entry.name.toLowerCase().endsWith(".qn");
+    const items: MenuAction[] = [
       { label: "New File…", action: async () => {
         const name = await promptText("New file name:", "untitled.txt");
         if (!name) return;
@@ -151,6 +152,15 @@ export class FileTree {
         const name = await promptText("New folder name:", "untitled folder");
         if (!name) return;
         try { await api.createDir(dirOf, name); await this.refreshAll(); }
+        catch (e) { await alertDialog(String(e)); }
+      }},
+      // "New Quinny File…" — mirrors FileBrowser.m newQuinnyFile:. Always shown
+      // so the discovery affordance is consistent; if the bundled CLI isn't
+      // present the created file is still valid, just not check/plan-able yet.
+      { label: "New Quinny File…", action: async () => {
+        const name = await promptText("New Quinny file (.qn appended if missing):", "untitled.qn");
+        if (!name) return;
+        try { const p = await api.quinnyNewFile(dirOf, name); await this.refreshAll(); this.onOpenFile(p); }
         catch (e) { await alertDialog(String(e)); }
       }},
       { label: "Rename…", action: async () => {
@@ -165,7 +175,27 @@ export class FileTree {
         catch (e) { await alertDialog(String(e)); }
       }},
       { label: "Reveal in File Manager", action: () => api.revealInExplorer(node.entry.path) },
-    ]);
+    ];
+    // .qn-file-only actions (FileBrowser.m:353-361): parse & static-plan the
+    // contract without needing an LLM. Surfaced right on the file the user
+    // right-clicked so the workflow is discoverable.
+    if (isQuinnyFile) {
+      items.push(
+        { label: "Quinny: Check", action: () => this.runQuinnyOnFile("check", node.entry.path, "Quinny check") },
+        { label: "Quinny: Show Plan", action: () => this.runQuinnyOnFile("plan", node.entry.path, "Quinny plan") },
+      );
+    }
+    contextMenu(x, y, items);
+  }
+
+  private async runQuinnyOnFile(subcommand: string, path: string, title: string) {
+    try {
+      const res = await api.quinnyRun(subcommand, path);
+      const status = res.exit_code === 0 ? "OK" : "failed";
+      await alertDialog(`${title} — ${status}\n\n${res.output}`);
+    } catch (e) {
+      await alertDialog(String(e));
+    }
   }
 
   private parentOf(path: string): string {

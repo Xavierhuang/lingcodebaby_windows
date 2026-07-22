@@ -156,3 +156,32 @@ button.tb:disabled { background: var(--muted); cursor: default; opacity: 0.7; }
 }
 .ctx-item { padding: 6px 12px; border-radius: 5px; cursor: default; font-size: 12.5px; }
 .ctx-item:hover { background: var(--accent); color: #fff; }
+
+/* ---- Custom endpoint sheet (endpoint.ts) ---- */
+.endpoint-sheet { min-width: 460px; max-width: 520px; }
+.endpoint-desc { font-size: 13px; margin-bottom: 6px; }
+.endpoint-hint { color: var(--muted); font-size: 11.5px; margin-bottom: 14px; }
+.endpoint-row { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+.endpoint-label { flex: 0 0 82px; color: var(--muted); font-size: 12.5px; }
+.endpoint-row input { flex: 1; font: inherit; padding: 6px 8px; border: 1px solid var(--border);
+  border-radius: 6px; background: var(--panel); color: var(--text); }
+.endpoint-key-status { color: var(--muted); font-size: 11px; margin: 4px 0 0 92px; }
+.endpoint-error { color: #d24f1f; font-size: 12.5px; min-height: 18px; margin-top: 10px; }
+.endpoint-buttons { display: flex; align-items: center; gap: 8px; }
+
+/* ---- Onboarding gate (onboarding.ts) ---- */
+.onboarding-overlay .modal { max-width: 640px; min-width: 560px; padding: 22px 24px; }
+.onboarding-title { font-size: 22px; font-weight: 600; margin-bottom: 4px; letter-spacing: -0.01em; }
+.onboarding-sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+.onboarding-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.onboarding-card {
+  text-align: left; padding: 12px 14px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--panel); color: var(--text); cursor: pointer; font: inherit;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.onboarding-card:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, var(--panel)); }
+.onboarding-card-title { font-weight: 600; margin-bottom: 4px; font-size: 13.5px; }
+.onboarding-card-body { color: var(--muted); font-size: 12px; line-height: 1.45; }
+.onboarding-error { color: #d24f1f; font-size: 12.5px; min-height: 18px; margin-top: 12px; }
+.onboarding-buttons .onboarding-skip { background: transparent; border: 1px solid var(--border); }
+.onboarding-buttons .onboarding-skip:disabled { opacity: 0.55; cursor: not-allowed; }

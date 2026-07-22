@@ -2,13 +2,25 @@
 # (deb/rpm/AppImage) bundles, then publishes a GitHub Release with a merged
 # updater manifest (latest.json).
 #
+# Every job first freezes the bundled Quinny CLI (PyInstaller) into
+# src-tauri/binaries/quinny/ so tauri-action ships it inside the installer.
+# Windows arm64 reuses the x64-frozen quinny.exe (WoA runs x64 under emulation
+# — PyInstaller can't cross-freeze to native arm64 from an x64 runner).
+#
 # Assumes this repo's root contains the Tauri app (package.json + src-tauri/).
 # If the app lives in a subfolder, set `projectPath` on the tauri-action step.
 #
 # Required repo secrets (Settings → Secrets and variables → Actions):
 #   TAURI_SIGNING_PRIVATE_KEY           contents of ~/.lingcodebaby-updater.key
-#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  the key password
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  the key password (lcb-updater-2026)
 # GITHUB_TOKEN is provided automatically.
+#
+# Optional repo secret:
+#   QUINNY_SOURCE_REPO  git URL of a Quinny fork carrying the WAF-neutral UA
+#                       + ANTHROPIC_AUTH_TOKEN patches (see
+#                       src-tauri/binaries/quinny/README.md). Empty →
+#                       `pip install quinny` from PyPI, which is only safe
+#                       once those patches land upstream.
 
 name: release
 
@@ -21,6 +33,10 @@ jobs:
   build:
     permissions:
       contents: write
+    # Promote secrets to job env so `if:` conditions can gate on them.
+    # (GitHub Actions doesn't allow direct `secrets.*` refs inside if-expressions.)
+    env:
+      QUINNY_SOURCE_REPO: ${{ secrets.QUINNY_SOURCE_REPO }}
     strategy:
       fail-fast: false
       matrix:
@@ -61,6 +77,36 @@ jobs:
 
       - name: Install frontend dependencies
         run: npm ci
+
+      # --- Bundled Quinny CLI --------------------------------------------------
+      # Freeze quinny with PyInstaller natively per platform so tauri-action
+      # can pick it up via bundle.resources. This adds ~2 min to each job but
+      # keeps the shipped installer self-contained (no `pip install quinny`
+      # for the end user).
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch Quinny source (optional patched fork)
+        if: ${{ env.QUINNY_SOURCE_REPO != '' }}
+        shell: bash
+        run: |
+          git clone --depth 1 "$QUINNY_SOURCE_REPO" "$RUNNER_TEMP/quinny-src"
+          echo "QUINNY_SOURCE=$RUNNER_TEMP/quinny-src" >> "$GITHUB_ENV"
+
+      - name: Build Quinny (Windows)
+        if: startsWith(matrix.platform, 'windows')
+        shell: pwsh
+        run: |
+          # PyInstaller can't cross-freeze to arm64 from x64 runners — the
+          # x64 quinny.exe runs under Windows-on-ARM's x64 emulation. Both
+          # matrix entries just freeze x64 and bundle the same binary.
+          pwsh -File scripts/build-quinny-windows.ps1
+
+      - name: Build Quinny (Linux)
+        if: startsWith(matrix.platform, 'ubuntu')
+        run: |
+          bash scripts/build-quinny-linux.sh
 
       - name: Build + publish release
         uses: tauri-apps/tauri-action@v0

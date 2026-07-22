@@ -1,7 +1,14 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
 
 export interface DirEntry { name: string; path: string; is_dir: boolean; }
-export interface Prefs { model: string; play_sounds: boolean; }
+export interface Prefs {
+  model: string;
+  play_sounds: boolean;
+  use_custom_endpoint: boolean;
+  custom_endpoint_url: string;
+  onboarding_complete: boolean;
+}
+export interface EndpointConfig { enabled: boolean; url: string; key_present: boolean; }
 
 export const api = {
   listDir: (path: string) => invoke<DirEntry[]>("list_dir", { path }),
@@ -30,6 +37,26 @@ export const api = {
   deployHasIndex: (folder: string) => invoke<boolean>("deploy_has_index", { folder }),
   deployCheck: (token: string, slug: string, exclude: string | null) =>
     invoke<any>("deploy_check", { token, slug, exclude }),
+
+  // Quinny (executable specification language, bundled with the app).
+  quinnyAvailable: () => invoke<boolean>("quinny_available"),
+  quinnyRun: (subcommand: string, path: string) =>
+    invoke<{ exit_code: number; output: string }>("quinny_run", { subcommand, path }),
+  quinnyNewFile: (dir: string, name: string) =>
+    invoke<string>("quinny_new_file", { dir, name }),
+  quinnyNewProject: (folder: string, description: string) =>
+    invoke<string>("quinny_new_project", { folder, description }),
+
+  // Personal Anthropic API key (Keychain-backed fallback for signed-out users).
+  anthropicKeyPresent: () => invoke<boolean>("anthropic_key_present"),
+  anthropicKeySave: (key: string) => invoke<void>("anthropic_key_save", { key }),
+  anthropicKeyDelete: () => invoke<void>("anthropic_key_delete"),
+
+  // Custom Anthropic-compatible endpoint (URL + key config sheet).
+  endpointGetConfig: () => invoke<EndpointConfig>("endpoint_get_config"),
+  endpointSaveConfig: (url: string, key: string, enabled: boolean) =>
+    invoke<void>("endpoint_save_config", { url, key, enabled }),
+  endpointDisable: () => invoke<void>("endpoint_disable"),
 };
 
 // ---- Claude streaming ----

@@ -21,7 +21,30 @@ impl Default for ChatState {
     }
 }
 
+/// Model tag that routes the chat through the LingModel managed proxy (the
+/// user's LingCode account) instead of their personal Claude subscription.
+const LINGMODEL_TAG: &str = "lingmodel";
+/// Upstream model id handed to the `claude` CLI when routing to LingModel.
+/// Mirrors the main app's bridge.mjs `lingModelUpstream()`. Internal subprocess
+/// arg only — never shown to the user (branding: surface "LingModel" only). The
+/// server proxy can rewrite the real upstream, so this is effectively a family tag.
+/// Also used by quinny.rs as `QUINNY_MODEL` so the bundled Quinny CLI routes
+/// through the same proxy.
+pub(crate) const LINGMODEL_UPSTREAM: &str = "kimi-k2.7";
+
 const SYSTEM_PROMPT: &str = "You are embedded in a minimal IDE. Make focused changes to files in the working directory and briefly explain what you did.\n\nWhen you need the user to make a real decision or resolve an ambiguity, ask a multiple-choice question instead of guessing. To do that, reply with ONLY a fenced code block labeled ask_user containing JSON, and nothing else in that turn:\n```ask_user\n{\"question\": \"Which database should I use?\", \"options\": [\"SQLite\", \"Postgres\"]}\n```\n\nThe IDE renders each option as a clickable button and sends the user's choice back as the next message. The user may also type a custom answer. Use this only for genuine decisions — don't over-ask.\n\nTo keep token cost low, read, search, and list files by running shell commands through the Bash tool rather than the native Read, Grep, and Glob tools: use `cat`/`head` to read a file, `grep`/`rg` to search, and `ls`/`find` to list. Still use the native Edit/Write tools for changes.";
+
+/// Appended to the system prompt when signed in, so the agent knows a LingCode
+/// Cloud managed backend is wired into this workspace (see
+/// fsops::scaffold_cloud_backend) and reaches for it instead of localStorage.
+/// Verbatim short hint from the full app's LingCodeCloudMCPSetup.signedInHint;
+/// the long capability detail is fetched live via describe_backend so it can't
+/// go stale here.
+const CLOUD_BACKEND_HINT: &str = "\n\nA LingCode Cloud managed backend (Postgres + auth + file storage + email + serverless functions + full-stack hosting) is available to this project via the `lingcode-cloud` MCP tools — call `describe_backend` to learn its current capabilities and limits BEFORE designing any data/auth/backend feature (don't guess, and don't reach for localStorage or tell the user to run an external server). If the app needs persistence or accounts, call `provision_backend` then `apply_migration`. The data API supports batch insert, upsert (ON CONFLICT), and `rpc()` for JOIN/aggregate/full-text reads — confirm specifics via `describe_backend`.";
+
+/// Appended to the system prompt when the bundled Quinny CLI is available so
+/// the agent knows it can reach for it. Verbatim from ClaudeChat.m:1327-1348.
+const QUINNY_HINT: &str = "\n\nQuinny — an executable specification language, BUNDLED with this app and always on your PATH (also $QUINNY_BIN); just run `quinny …` via bash, no install needed. It VERIFIES code against acceptance criteria — it does NOT write the code for you (you write the code; you're better at it than a decomposing pipeline). Reach for it when a task has real correctness-critical LOGIC: pricing, cart/checkout math, business rules, state machines, validation, auth, parsing, calculations — the parts where a silent bug is expensive. Do NOT use it for UI/layout/styling, static pages, simple scripts, or one-off edits — it can't gate those and adds no value.\nWhen it fits:\n1. `quinny scaffold \"<what to build>\" -o <dir>` — drafts a `.qn` contract scoped to the verifiable logic, plus a module stub. (The user can describe it in plain English; scaffold writes the acceptance criteria for them.)\n2. Implement the module — write the real code.\n3. `quinny verify <contract>.qn <dir>` — runs the criteria against your code and reports per-criterion PASS/FAIL. Keep fixing until all gating (test) criteria pass.\n4. To lock it in, `quinny verify … --emit <name>_contract_test.py` and commit the .qn + suite so it re-runs deterministically in CI with no model.\nQuick reference: `quinny --help`. Rationale: agents write plausible code that 'looks done' but misses edge cases; verify makes 'is it correct?' an objective command, and the contract keeps catching regressions after you move on. (`quinny build`/`gen` code generation is experimental — prefer writing the code yourself.)";
 
 /// Locate a `claude` executable, preferring a real binary over a shell shim.
 fn find_claude() -> Option<PathBuf> {
@@ -125,6 +148,7 @@ fn parse_ask_user(text: &str) -> Option<(String, Vec<String>)> {
 
 #[tauri::command]
 pub async fn claude_send(
+    app: tauri::AppHandle,
     state: tauri::State<'_, ChatState>,
     message: String,
     cwd: String,
@@ -135,6 +159,26 @@ pub async fn claude_send(
     let bin = find_claude().ok_or_else(|| {
         "Could not find the `claude` CLI. Install Claude Code and sign in with `claude login`.".to_string()
     })?;
+
+    // When signed in, wire the LingCode Cloud backend into this workspace's
+    // .mcp.json and hand the agent the token via the environment (kept out of
+    // the on-disk config). The same account token also powers LingModel below.
+    let cloud_token = crate::deploy::deploy_get_saved_token();
+    if cloud_token.is_some() {
+        crate::fsops::scaffold_cloud_backend(&cwd);
+    }
+    // Locate the bundled Quinny CLI once so we can (a) advertise it in the
+    // system prompt, (b) prepend its dir to $PATH for the child, and
+    // (c) point $QUINNY_BIN at it. Silent no-op when the frozen binary
+    // isn't shipped yet — the hint is suppressed so we don't lie to the agent.
+    let quinny_dir = crate::quinny::bundled_dir(&app);
+    let mut system_prompt = SYSTEM_PROMPT.to_string();
+    if cloud_token.is_some() {
+        system_prompt.push_str(CLOUD_BACKEND_HINT);
+    }
+    if quinny_dir.is_some() {
+        system_prompt.push_str(QUINNY_HINT);
+    }
 
     // Build a std Command (so we can set Windows creation flags), then convert
     // to a tokio Command for async stdout streaming.
@@ -149,10 +193,75 @@ pub async fn claude_send(
         .arg("bypassPermissions")
         .arg("--disallowedTools")
         .arg("AskUserQuestion")
+        // Only load the opened project's config, NOT the user's global ~/.claude
+        // (personal skills/plugins/SessionStart hooks) — otherwise a prompt like
+        // "make X" can trip a global skill instead of running the task. Auth is
+        // unaffected.
+        .arg("--setting-sources")
+        .arg("project,local")
         .arg("--append-system-prompt")
-        .arg(SYSTEM_PROMPT);
-    if model != "default" {
-        std_cmd.arg("--model").arg(&model);
+        .arg(&system_prompt);
+    if let Some(tok) = &cloud_token {
+        // Expanded into the ${LINGCODE_CLOUD_TOKEN} .mcp.json header by the CLI.
+        std_cmd.env("LINGCODE_CLOUD_TOKEN", tok);
+    }
+    // Make the bundled Quinny CLI available to the agent: prepend its dir to
+    // PATH and point $QUINNY_BIN at it. Mirrors ClaudeChat.m:1445-1452.
+    if let Some(dir) = quinny_dir.as_ref() {
+        let sep = if cfg!(windows) { ";" } else { ":" };
+        let existing = std::env::var("PATH").unwrap_or_default();
+        std_cmd.env("PATH", format!("{}{}{}", dir.display(), sep, existing));
+        std_cmd.env("QUINNY_BIN", dir.join(if cfg!(windows) { "quinny.exe" } else { "quinny" }));
+    }
+    // Endpoint routing priority (highest wins). Mirrors ClaudeChat.m:1462-1482.
+    //   1. Custom endpoint (BYO URL + x-api-key) — overrides everything.
+    //   2. LingModel proxy (LingCode account bearer).
+    //   3. Personal Anthropic API key from Keychain (env fallback for signed-out).
+    //   4. Claude subscription (env unchanged — CLI uses `claude login`).
+    if crate::endpoint::is_active() {
+        let prefs = crate::prefs::get_prefs();
+        let key = crate::endpoint::get_key()
+            .ok_or_else(|| "Custom endpoint enabled but key is missing.".to_string())?;
+        std_cmd.env("ANTHROPIC_BASE_URL", &prefs.custom_endpoint_url);
+        std_cmd.env("ANTHROPIC_API_KEY", &key);
+        std_cmd.env_remove("ANTHROPIC_AUTH_TOKEN");
+        // Only pass `--model` when the picker has a specific choice; LingModel
+        // routing is disabled here so lingmodel-tag falls back to letting the
+        // custom endpoint pick its default.
+        if model != LINGMODEL_TAG && model != "default" {
+            std_cmd.arg("--model").arg(&model);
+        }
+    } else if model == LINGMODEL_TAG {
+        // LingModel: route the same `claude` CLI at the LingCode proxy using the
+        // user's LingCode account token, and hand the engine the upstream model.
+        std_cmd.arg("--model").arg(LINGMODEL_UPSTREAM);
+        std_cmd.env("ANTHROPIC_BASE_URL", crate::deploy::lingmodel_anthropic_base_url());
+        match cloud_token.as_ref() {
+            Some(tok) => {
+                std_cmd.env("ANTHROPIC_AUTH_TOKEN", tok);
+            }
+            // Backstop — the frontend gate normally guarantees a token first.
+            None => return Err("Sign in to LingCode to use LingModel.".to_string()),
+        }
+        // Never leak the user's real Anthropic key to the proxy.
+        std_cmd.env_remove("ANTHROPIC_API_KEY");
+        // The bundled Quinny CLI inherits these (agent → bash → quinny) and
+        // uses the Bearer token; tell it which model to request through the
+        // proxy. Mirrors ClaudeChat.m:1476.
+        if quinny_dir.is_some() {
+            std_cmd.env("QUINNY_MODEL", LINGMODEL_UPSTREAM);
+        }
+    } else {
+        // Subscription path (`claude login`) — no env overrides — BUT if the
+        // user has pasted a personal Anthropic key, hand it to the CLI so
+        // signed-out users can still chat + run `quinny gen`. Env-set key
+        // wins over `claude login` in the Anthropic SDK precedence.
+        if let Some(k) = crate::anthropic_key::get() {
+            std_cmd.env("ANTHROPIC_API_KEY", k);
+        }
+        if model != "default" {
+            std_cmd.arg("--model").arg(&model);
+        }
     }
     if let Some(sid) = resume.as_ref().filter(|s| !s.is_empty()) {
         std_cmd.arg("--resume").arg(sid);

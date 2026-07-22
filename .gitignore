@@ -7,6 +7,11 @@ dist/
 # Rust / Tauri build output (gigabytes)
 src-tauri/target/
 
+# PyInstaller-frozen Quinny CLI (produced per-release on a Windows box; ~14 MB).
+# The README.md placeholder stays tracked so the dir exists in fresh clones.
+src-tauri/binaries/quinny/*
+!src-tauri/binaries/quinny/README.md
+
 # updater signing keys / secrets (never commit)
 *.key
 *.key.pub

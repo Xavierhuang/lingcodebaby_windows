@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LingCodeBaby Help</title>
+<style>
+  :root {
+    --bg: #fbfaf7;
+    --ink: #15181c;
+    --muted: #5b6068;
+    --rule: #e5e2dc;
+    --accent: #d24f1f;
+    --code-bg: #f4f1ec;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 48px 28px 96px; }
+  h1 { font-size: 34px; letter-spacing: -0.025em; margin: 0 0 8px; }
+  h2 { font-size: 22px; letter-spacing: -0.015em; margin: 42px 0 14px; padding-bottom: 8px; border-bottom: 1px solid var(--rule); }
+  h3 { font-size: 17px; margin: 28px 0 10px; }
+  p { margin: 0 0 14px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  ul, ol { margin: 0 0 16px; padding-left: 24px; }
+  li { margin-bottom: 6px; }
+  code {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 13px;
+    background: var(--code-bg);
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+  pre {
+    background: var(--code-bg);
+    padding: 16px;
+    border-radius: 8px;
+    overflow-x: auto;
+    margin: 0 0 18px;
+  }
+  pre code { background: transparent; padding: 0; }
+  .sub { color: var(--muted); font-size: 14px; margin-top: -2px; }
+  .callout {
+    border-left: 3px solid var(--accent);
+    background: #fdf5ef;
+    padding: 12px 16px;
+    margin: 0 0 18px;
+    border-radius: 0 6px 6px 0;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>LingCodeBaby Help</h1>
+  <p class="sub">A minimal cross-platform IDE with Claude, cloud deploy, and the Quinny specification language built in. Windows, Linux, and macOS from one codebase.</p>
+
+  <h2>System requirements</h2>
+  <ul>
+    <li><strong>Windows:</strong> Windows 10 (1809) or later; WebView2 runtime (usually already installed).</li>
+    <li><strong>Linux:</strong> Any distro with <code>webkit2gtk-4.1</code> (Ubuntu 22.04+, Fedora 39+, etc.). Ships as <code>.deb</code>, <code>.rpm</code>, and <code>.AppImage</code>.</li>
+    <li><strong>macOS:</strong> 11 (Big Sur) or later.</li>
+    <li>Node.js (for the bundled <code>claude</code> CLI) and an internet connection.</li>
+  </ul>
+
+  <h2>Install</h2>
+  <ol>
+    <li>Download the latest installer for your OS from the <a href="https://github.com/Xavierhuang/lingcodebaby_windows/releases">releases page</a>.</li>
+    <li>Run the installer (<code>*-setup.exe</code> on Windows; <code>.deb</code>/<code>.rpm</code>/<code>.AppImage</code> on Linux).</li>
+    <li>Launch <strong>LingCodeBaby</strong> from the Start menu / launcher.</li>
+  </ol>
+  <p><strong>Prerequisite:</strong> the <code>claude</code> CLI must be on your <code>PATH</code>. Install with <code>npm i -g @anthropic-ai/claude-code</code> or the official installer.</p>
+
+  <h2>Sign in — pick one</h2>
+  <p>The Welcome card on first launch offers four paths. You can revisit it any time from <strong>Help → Welcome to LingCodeBaby…</strong>.</p>
+  <ul>
+    <li><strong>LingModel account</strong> — LingCode's managed proxy. Recommended for casual use; no personal Anthropic key required.</li>
+    <li><strong>Claude subscription</strong> — inherits the credentials from <code>claude login</code> in your terminal.</li>
+    <li><strong>Custom endpoint</strong> — any Anthropic-compatible URL (Moonshot Kimi, DeepSeek, LiteLLM, OpenRouter, self-hosted). Config sheet at <strong>View → Custom Endpoint…</strong>.</li>
+    <li><strong>Personal Anthropic key</strong> — paste <code>sk-ant-…</code> into the OS Keychain via <strong>View → Anthropic API Key…</strong>. Used automatically as a fallback when the other paths aren't configured.</li>
+  </ul>
+  <div class="callout">Endpoint priority (highest wins): Custom endpoint → LingModel → Personal key → Claude subscription. Change the picker in <strong>View → Claude Model</strong> to steer between the first two.</div>
+
+  <h2>Working on a project</h2>
+  <ul>
+    <li><strong>Open a folder:</strong> <code>Ctrl+Shift+O</code> (macOS: <code>⌘⇧O</code>).</li>
+    <li><strong>New window:</strong> <code>Ctrl+N</code>.</li>
+    <li><strong>Save:</strong> <code>Ctrl+S</code>.</li>
+    <li><strong>Find in file:</strong> <code>Ctrl+F</code>; next/previous with <code>Ctrl+G</code> / <code>Ctrl+Shift+G</code>.</li>
+  </ul>
+
+  <h2>Chat with Claude</h2>
+  <p>The right pane is a live chat that drives the <code>claude</code> CLI as a subprocess. It shows thinking blocks, tool calls, and per-file edits inline. Stop a runaway turn with <code>Ctrl+.</code>.</p>
+  <p>When Claude needs a decision it can ask a multiple-choice question — the app renders each option as a clickable chip.</p>
+
+  <h2>Quinny (specification language)</h2>
+  <p>Quinny is bundled with LingCodeBaby — no install. It lets the agent write acceptance criteria for correctness-critical logic (pricing, cart math, state machines, validation), then verify the code against them. Not useful for UI/layout tasks.</p>
+  <ul>
+    <li><strong>New Quinny Project…</strong> — <strong>File</strong> menu (<code>Ctrl+Shift+N</code>). Prompts for a name + one-sentence description, then runs <code>quinny gen</code> to draft a <code>project.qn</code>.</li>
+    <li><strong>New Quinny File…</strong> — right-click in the file tree.</li>
+    <li><strong>Quinny: Check / Show Plan</strong> — right-click any <code>.qn</code> file.</li>
+    <li>The agent can also run <code>quinny scaffold</code> and <code>quinny verify</code> itself when the task is correctness-critical.</li>
+  </ul>
+
+  <h2>Deploy to LingCode Cloud</h2>
+  <p>Toolbar button <strong>Deploy</strong> or <strong>File → Deploy to LingCode Cloud</strong> (<code>Ctrl+Shift+D</code>). Tars the open folder, uploads it to LingCode Cloud, and returns a public URL. Requires a LingModel/LingCode sign-in.</p>
+
+  <h2>Preferences and secrets</h2>
+  <ul>
+    <li><strong>Preferences JSON:</strong> stored under your OS config dir (<code>%APPDATA%\com.lingcodebaby.app\prefs.json</code> on Windows; <code>~/.config/com.lingcodebaby.app/prefs.json</code> on Linux).</li>
+    <li><strong>Secrets in Keychain:</strong> the LingCode account token (service <code>LingCode</code>, account <code>lingcode_auth_access_token</code>), personal Anthropic key (service <code>LingCodeBaby</code>, account <code>anthropic_api_key</code>), and custom-endpoint key (service <code>LingCodeBaby</code>, account <code>customEndpointAPIKey</code>).</li>
+  </ul>
+
+  <h2>Auto-update</h2>
+  <p>LingCodeBaby checks for updates a few seconds after launch, and on demand via <strong>LingCodeBaby → Check for Updates…</strong>. Updates are cryptographically signed — the app refuses any update whose signature doesn't verify against the pubkey embedded at build time.</p>
+
+  <h2>Report a bug</h2>
+  <p>Open an issue on the <a href="https://github.com/Xavierhuang/lingcodebaby_windows/issues">GitHub tracker</a>. Include your OS + version, and if it's a Claude/agent bug, the exact prompt that produced it.</p>
+</div>
+</body>
+</html>

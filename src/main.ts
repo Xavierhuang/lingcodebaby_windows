@@ -5,7 +5,9 @@ import { CodeEditor } from "./editor";
 import { ChatPanel } from "./chat";
 import { runDeploy } from "./deploy";
 import { checkForUpdates } from "./updater";
-import { alertDialog } from "./ui";
+import { alertDialog, promptText, tokenPrompt } from "./ui";
+import { showEndpointSheet } from "./endpoint";
+import { showOnboarding, showOnboardingIfNeeded } from "./onboarding";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -44,9 +46,9 @@ const titleEl = app.querySelector(".toolbar .title") as HTMLElement;
 const modelLabel = app.querySelector(".model-label") as HTMLElement;
 
 // Current Claude model — controlled from the View → Claude Model menu.
-let currentModel = "sonnet";
+let currentModel = "lingmodel";
 const MODEL_NAMES: Record<string, string> = {
-  default: "Default", opus: "Opus", sonnet: "Sonnet", haiku: "Haiku",
+  lingmodel: "LingModel", default: "Default", opus: "Opus", sonnet: "Sonnet", haiku: "Haiku",
 };
 function setModel(m: string, persist = true) {
   currentModel = m;
@@ -66,6 +68,17 @@ let folder: string | null = null;
 // ---- wiring ----
 chat.getCwd = () => folder;
 chat.getModel = () => currentModel;
+// LingModel routes through the LingCode proxy and needs a LingCode sign-in.
+// Reuse the same device-flow sign-in modal the deploy flow uses.
+chat.ensureAuth = async (model: string) => {
+  if (model !== "lingmodel") return true;
+  if (await api.deployGetSavedToken()) return true;
+  const tok = await tokenPrompt(
+    () => api.deploySignin(),
+    "Sign in to LingCode to use LingModel."
+  );
+  return !!tok;
+};
 chat.onFilesModified = async () => {
   await tree.refreshAll();
   if (currentFile) await reloadCurrentFromDisk();
@@ -125,15 +138,47 @@ async function doOpenFile() {
 async function doOpenFolder() {
   const path = await open({ directory: true, multiple: false });
   if (path && typeof path === "string") {
-    folder = path;
-    await tree.setRoot(path);
-    deployBtn.disabled = false;
-    updateTitle();
-    // Scaffold screenshot/visual-regression support (no-op unless the bridge is installed).
-    try {
-      const note = await api.scaffoldAgentFiles(path);
-      if (note) chat.postNote(note);
-    } catch { /* non-fatal */ }
+    await loadFolder(path);
+  }
+}
+
+async function loadFolder(path: string) {
+  folder = path;
+  await tree.setRoot(path);
+  deployBtn.disabled = false;
+  updateTitle();
+  // Scaffold screenshot/visual-regression support (no-op unless the bridge is installed).
+  try {
+    const note = await api.scaffoldAgentFiles(path);
+    if (note) chat.postNote(note);
+  } catch { /* non-fatal */ }
+}
+
+// File → New Quinny Project…  Mirrors EditorWindowController.m newQuinnyProject:
+// (Mac Cmd-Shift-N). Prompts for parent folder + project name + one-sentence
+// description, then runs `quinny gen "<desc>" -o <folder>/project.qn` and
+// opens the resulting folder in this window.
+async function doNewQuinnyProject() {
+  const name = await promptText("New Quinny project (folder name):", "MyProject");
+  if (!name) return;
+  const description = await promptText(
+    "Describe the project in one sentence:",
+    "a Slack clone with channels, DMs, threads, and search",
+  );
+  if (!description) return;
+  const parent = await open({
+    directory: true,
+    multiple: false,
+    defaultPath: folder ?? undefined,
+    title: "Choose parent folder for the new project",
+  });
+  if (!parent || typeof parent !== "string") return;
+  const projectPath = `${parent.replace(/[\\/]+$/, "")}/${name}`;
+  try {
+    await api.quinnyNewProject(projectPath, description);
+    await loadFolder(projectPath);
+  } catch (e) {
+    await alertDialog("Quinny generation failed:\n\n" + String(e));
   }
 }
 
@@ -152,7 +197,38 @@ function updateTitle() {
 }
 
 async function persistPrefs() {
-  try { await api.setPrefs({ model: currentModel, play_sounds: chat.playSounds }); } catch { /* ignore */ }
+  // Fetch-merge-set: the Prefs shape now carries endpoint + onboarding fields
+  // owned by other subsystems. Sending just {model, play_sounds} would clobber
+  // them back to Rust defaults (they carry `#[serde(default)]` on the Rust
+  // side). Read current first, apply just the fields we own, write back.
+  try {
+    const current = await api.getPrefs();
+    await api.setPrefs({ ...current, model: currentModel, play_sounds: chat.playSounds });
+  } catch { /* ignore */ }
+}
+
+// Prompt for a personal Anthropic API key and save it into the OS Keychain.
+// Mirrors Mac's inline key-entry sheet (LCBAnthropicKey callers). Passing an
+// empty string clears the stored key.
+async function doConfigureAnthropicKey() {
+  const present = await api.anthropicKeyPresent();
+  const prompt = present
+    ? "Anthropic API key (currently stored — leave empty to keep, or type a new one to replace; type 'delete' to clear):"
+    : "Paste your Anthropic API key (sk-ant-…). Stored in the OS Keychain, never on disk:";
+  const value = await promptText(prompt, "");
+  if (value === null) return; // cancelled — no change
+  try {
+    if (value.trim().toLowerCase() === "delete") {
+      await api.anthropicKeyDelete();
+      await alertDialog("Personal Anthropic API key removed.");
+    } else if (value.trim().length > 0) {
+      await api.anthropicKeySave(value);
+      await alertDialog("Anthropic API key saved to the OS Keychain.");
+    }
+    // Empty input + no explicit 'delete' = no change (matches the prompt).
+  } catch (e) {
+    await alertDialog("Could not save the key: " + String(e));
+  }
 }
 
 // ---- splitters ----
@@ -191,8 +267,12 @@ listen<string>("menu", async (ev) => {
   switch (id) {
     case "open_file": await doOpenFile(); break;
     case "open_folder": await doOpenFolder(); break;
+    case "new_quinny_project": await doNewQuinnyProject(); break;
     case "save": await saveFile(); break;
     case "deploy": await runDeploy(folder); break;
+    case "custom_endpoint": await showEndpointSheet(); break;
+    case "anthropic_key": await doConfigureAnthropicKey(); break;
+    case "welcome": await showOnboarding(false); break;
     case "find": editor.openFind(); break;
     case "find_next": editor.findNext(); break;
     case "find_prev": editor.findPrev(); break;
@@ -213,6 +293,12 @@ listen<string>("menu", async (ev) => {
     chat.playSounds = prefs.play_sounds;
   } catch { /* defaults are fine */ }
   updateTitle();
+
+  // First-run onboarding gate — hard gate if nothing is configured yet.
+  // Mirrors Mac LCBOnboarding showGate: (blocks the app on cold launch until
+  // an auth path is chosen; no-op once the user completes it once).
+  try { await showOnboardingIfNeeded(); } catch { /* non-fatal */ }
+
   // Quietly check for updates a few seconds after launch.
   setTimeout(() => checkForUpdates(true), 4000);
 })();

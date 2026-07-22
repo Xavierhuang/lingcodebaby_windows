@@ -1,7 +1,10 @@
+mod anthropic_key;
 mod chat;
 mod deploy;
+mod endpoint;
 mod fsops;
 mod prefs;
+mod quinny;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -38,6 +41,7 @@ fn build_menu(app: &tauri::AppHandle, prefs: &prefs::Prefs) -> tauri::Result<(Me
         true,
         &[
             &MenuItem::with_id(app, "new_window", "New Window", true, Some("CmdOrCtrl+N"))?,
+            &MenuItem::with_id(app, "new_quinny_project", "New Quinny Project…", true, Some("CmdOrCtrl+Shift+N"))?,
             &MenuItem::with_id(app, "open_file", "Open…", true, Some("CmdOrCtrl+O"))?,
             &MenuItem::with_id(app, "open_folder", "Open Folder…", true, Some("CmdOrCtrl+Shift+O"))?,
             &PredefinedMenuItem::separator(app)?,
@@ -71,6 +75,7 @@ fn build_menu(app: &tauri::AppHandle, prefs: &prefs::Prefs) -> tauri::Result<(Me
     let mk_model = |id: &str, label: &str| -> tauri::Result<CheckMenuItem<Wry>> {
         CheckMenuItem::with_id(app, format!("model:{id}"), label, true, prefs.model == id, None::<&str>)
     };
+    let m_lingmodel = mk_model("lingmodel", "LingModel — LingCode account")?;
     let m_default = mk_model("default", "Default (CLI / account)")?;
     let m_opus = mk_model("opus", "Opus — highest quality")?;
     let m_sonnet = mk_model("sonnet", "Sonnet — balanced (recommended)")?;
@@ -79,7 +84,7 @@ fn build_menu(app: &tauri::AppHandle, prefs: &prefs::Prefs) -> tauri::Result<(Me
         app,
         "Claude Model",
         true,
-        &[&m_default, &m_opus, &m_sonnet, &m_haiku],
+        &[&m_lingmodel, &m_default, &m_opus, &m_sonnet, &m_haiku],
     )?;
 
     let thinking = CheckMenuItem::with_id(app, "toggle_thinking", "Show Claude Thinking", true, false, Some("CmdOrCtrl+Shift+T"))?;
@@ -97,12 +102,27 @@ fn build_menu(app: &tauri::AppHandle, prefs: &prefs::Prefs) -> tauri::Result<(Me
             &sounds,
             &PredefinedMenuItem::separator(app)?,
             &model_menu,
+            &MenuItem::with_id(app, "custom_endpoint", "Custom Endpoint…", true, None::<&str>)?,
+            &MenuItem::with_id(app, "anthropic_key", "Anthropic API Key…", true, None::<&str>)?,
         ],
     )?;
 
-    let menu = Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu, &view_menu])?;
+    // Help menu — parallels Mac's "LingCode Baby Help" (LCBHelpWindowController)
+    // and the Welcome/onboarding entry (LCBOnboarding show:).
+    let help_menu = Submenu::with_items(
+        app,
+        "Help",
+        true,
+        &[
+            &MenuItem::with_id(app, "help_window", "LingCodeBaby Help", true, Some("F1"))?,
+            &MenuItem::with_id(app, "welcome", "Welcome to LingCodeBaby…", true, None::<&str>)?,
+        ],
+    )?;
+
+    let menu = Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu, &view_menu, &help_menu])?;
 
     let mut models = HashMap::new();
+    models.insert("lingmodel".to_string(), m_lingmodel);
     models.insert("default".to_string(), m_default);
     models.insert("opus".to_string(), m_opus);
     models.insert("sonnet".to_string(), m_sonnet);
@@ -178,6 +198,21 @@ pub fn run() {
                         .center()
                         .build();
                 }
+                "help_window" => {
+                    // Open (or focus) the Help window — a secondary webview
+                    // pointing at the bundled help.html. Mirrors Mac's
+                    // LCBHelpWindowController showSupportWindow (singleton).
+                    if let Some(w) = app.get_webview_window("help") {
+                        let _ = w.set_focus();
+                    } else {
+                        let _ = WebviewWindowBuilder::new(app, "help", WebviewUrl::App("help.html".into()))
+                            .title("LingCodeBaby Help")
+                            .inner_size(820.0, 700.0)
+                            .min_inner_size(480.0, 320.0)
+                            .center()
+                            .build();
+                    }
+                }
                 other => {
                     emit_focused(app, other.to_string());
                 }
@@ -207,6 +242,16 @@ pub fn run() {
             deploy::deploy_has_index,
             deploy::deploy_check,
             deploy::deploy_upload,
+            quinny::quinny_available,
+            quinny::quinny_run,
+            quinny::quinny_new_file,
+            quinny::quinny_new_project,
+            anthropic_key::anthropic_key_present,
+            anthropic_key::anthropic_key_save,
+            anthropic_key::anthropic_key_delete,
+            endpoint::endpoint_get_config,
+            endpoint::endpoint_save_config,
+            endpoint::endpoint_disable,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

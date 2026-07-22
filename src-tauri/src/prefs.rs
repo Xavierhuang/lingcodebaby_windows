@@ -6,14 +6,34 @@ use std::path::PathBuf;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Prefs {
-    pub model: String,       // "default" | "opus" | "sonnet" | "haiku"
+    pub model: String,       // "lingmodel" | "default" | "opus" | "sonnet" | "haiku"
     pub play_sounds: bool,
+    /// Custom endpoint state — the API key itself is in the OS Keychain
+    /// (endpoint.rs), never in this JSON. Mirrors Mac ClaudeChat.m's
+    /// `LCB.customEndpointURL` NSUserDefaults key + `useCustomEndpoint`.
+    #[serde(default)]
+    pub use_custom_endpoint: bool,
+    #[serde(default)]
+    pub custom_endpoint_url: String,
+    /// Sticky flag set once the user has cleared the first-run onboarding
+    /// gate. `false` on a fresh install → gate is shown on launch. Mirrors
+    /// LCBOnboarding's "shown once" NSUserDefaults flag.
+    #[serde(default)]
+    pub onboarding_complete: bool,
 }
 
 impl Default for Prefs {
     fn default() -> Self {
-        // Defaults match the original app: Sonnet, sounds on.
-        Prefs { model: "sonnet".into(), play_sounds: true }
+        // Fresh installs default to LingModel (LingCode account, no personal
+        // Claude subscription needed); sounds on. Existing users keep their
+        // saved pref in prefs.json.
+        Prefs {
+            model: "lingmodel".into(),
+            play_sounds: true,
+            use_custom_endpoint: false,
+            custom_endpoint_url: String::new(),
+            onboarding_complete: false,
+        }
     }
 }
 
