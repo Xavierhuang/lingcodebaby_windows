@@ -155,10 +155,13 @@ pub async fn claude_send(
     cwd: String,
     model: String,
     resume: Option<String>,
-    /// True when the turn was started by hands-free voice mode. Only then do we
-    /// swap `bypassPermissions` for the spoken approval gate — see the comment
-    /// at the flag site below for why this isn't unconditional.
-    #[allow(unused_variables)] voice_mode: Option<bool>,
+    // True when the turn was started by hands-free voice mode. Only then do we
+    // swap `bypassPermissions` for the spoken approval gate — see the comment
+    // at the flag site below for why this isn't unconditional.
+    // (Plain `//`, not `///`: rustc allows only allow/cfg/cfg_attr/deny/expect/
+    // forbid/warn as attributes on a function parameter, and a doc comment is
+    // not one of them.)
+    voice_mode: Option<bool>,
     on_event: Channel<Value>,
 ) -> Result<(), String> {
     let voice_mode = voice_mode.unwrap_or(false);
