@@ -10,6 +10,16 @@ export interface Prefs {
 }
 export interface EndpointConfig { enabled: boolean; url: string; key_present: boolean; }
 
+/** Whether hands-free voice mode can run right now. Never carries vendor detail. */
+export interface VoiceStatus {
+  signed_in: boolean;
+  transcribe: boolean;
+  speak: boolean;
+  reason: string;
+}
+/** Loose speech turned into an agent prompt plus a line to read back aloud. */
+export interface VoiceShaped { prompt: string; summary: string; degraded: boolean; }
+
 export const api = {
   listDir: (path: string) => invoke<DirEntry[]>("list_dir", { path }),
   readFile: (path: string) => invoke<string>("read_text_file", { path }),
@@ -52,6 +62,18 @@ export const api = {
   anthropicKeySave: (key: string) => invoke<void>("anthropic_key_save", { key }),
   anthropicKeyDelete: () => invoke<void>("anthropic_key_delete"),
 
+  // Hands-free voice mode. All of these go through Rust because the Tauri CSP
+  // pins connect-src to 'self' and ipc: — the webview cannot reach lingcode.dev.
+  voiceStatus: () => invoke<VoiceStatus>("voice_status"),
+  voiceShape: (text: string) => invoke<VoiceShaped>("voice_shape", { text }),
+  voiceTranscribe: (audio: number[], mime: string) =>
+    invoke<string>("voice_transcribe", { audio, mime }),
+  /** Returns [audio bytes, content type] for the webview to play as a blob. */
+  voiceSpeak: (text: string) => invoke<[number[], string]>("voice_speak", { text }),
+  /** Answer a spoken risky-tool confirmation. False if the id already timed out. */
+  voiceApproveResolve: (id: string, allow: boolean) =>
+    invoke<boolean>("voice_approve_resolve", { id, allow }),
+
   // Custom Anthropic-compatible endpoint (URL + key config sheet).
   endpointGetConfig: () => invoke<EndpointConfig>("endpoint_get_config"),
   endpointSaveConfig: (url: string, key: string, enabled: boolean) =>
@@ -72,7 +94,12 @@ export type ChatEvent =
   | { kind: "done"; stderr: string };
 
 export function claudeSend(
-  args: { message: string; cwd: string; model: string; resume: string | null },
+  args: {
+    message: string; cwd: string; model: string; resume: string | null;
+    /** True only for hands-free turns — switches Rust to the spoken approval
+     *  gate instead of bypassPermissions. Omit for normal hands-on chat. */
+    voiceMode?: boolean;
+  },
   onEvent: (e: ChatEvent) => void
 ): Promise<void> {
   const channel = new Channel<ChatEvent>();

@@ -150,12 +150,21 @@ fn parse_ask_user(text: &str) -> Option<(String, Vec<String>)> {
 pub async fn claude_send(
     app: tauri::AppHandle,
     state: tauri::State<'_, ChatState>,
+    voice: tauri::State<'_, crate::VoiceApprovalHandle>,
     message: String,
     cwd: String,
     model: String,
     resume: Option<String>,
+    // True when the turn was started by hands-free voice mode. Only then do we
+    // swap `bypassPermissions` for the spoken approval gate — see the comment
+    // at the flag site below for why this isn't unconditional.
+    // (Plain `//`, not `///`: rustc allows only allow/cfg/cfg_attr/deny/expect/
+    // forbid/warn as attributes on a function parameter, and a doc comment is
+    // not one of them.)
+    voice_mode: Option<bool>,
     on_event: Channel<Value>,
 ) -> Result<(), String> {
+    let voice_mode = voice_mode.unwrap_or(false);
     let bin = find_claude().ok_or_else(|| {
         "Could not find the `claude` CLI. Install Claude Code and sign in with `claude login`.".to_string()
     })?;
@@ -189,8 +198,6 @@ pub async fn claude_send(
         .arg("--output-format")
         .arg("stream-json")
         .arg("--verbose")
-        .arg("--permission-mode")
-        .arg("bypassPermissions")
         .arg("--disallowedTools")
         .arg("AskUserQuestion")
         // Only load the opened project's config, NOT the user's global ~/.claude
@@ -201,6 +208,52 @@ pub async fn claude_send(
         .arg("project,local")
         .arg("--append-system-prompt")
         .arg(&system_prompt);
+
+    // ── Permission mode ────────────────────────────────────────────────────
+    // Print mode can't render an interactive approval prompt, which is why this
+    // has historically been `--permission-mode bypassPermissions` — i.e. nothing
+    // gated at all, including `rm -rf`, git push and deploys.
+    //
+    // In VOICE mode we can do better, because there IS someone to ask: swap in
+    // `--permission-prompt-tool`, which routes each decision to a local MCP tool
+    // (approval.rs). Safe, in-project operations return allow instantly; risky
+    // ones get read aloud and wait for a spoken confirmation phrase.
+    //
+    // Why this is not unconditional: with the gate on and no voice loop running,
+    // there is nobody to answer, so every risky tool would sit for 90s and then
+    // be denied. Fixing the non-voice case needs an on-screen approval dialog,
+    // which is deliberately out of scope here — so hands-on behaviour is
+    // unchanged, and that limitation is called out rather than papered over.
+    if voice_mode {
+        match voice.ensure_started(&app, std::path::PathBuf::from(&cwd)).await {
+            Ok((mcp_config, tool_name)) => {
+                std_cmd
+                    .arg("--permission-mode")
+                    .arg("default")
+                    .arg("--permission-prompt-tool")
+                    .arg(tool_name)
+                    // Headless `claude -p` needs BOTH --mcp-config and
+                    // --allowedTools for an MCP tool to be reachable. With only
+                    // the former the tool silently never loads and the gate
+                    // never fires — which would look like "voice approval is
+                    // broken" with nothing in any log.
+                    .arg("--mcp-config")
+                    .arg(mcp_config)
+                    .arg("--allowedTools")
+                    .arg(crate::approval::ApprovalServer::permission_tool_name());
+            }
+            Err(e) => {
+                // Fail closed. Silently falling back to bypassPermissions would
+                // mean the user believes they have a spoken gate while the agent
+                // runs completely unattended.
+                return Err(format!(
+                    "Voice mode couldn't start the approval gate, so the turn was not run: {e}"
+                ));
+            }
+        }
+    } else {
+        std_cmd.arg("--permission-mode").arg("bypassPermissions");
+    }
     if let Some(tok) = &cloud_token {
         // Expanded into the ${LINGCODE_CLOUD_TOKEN} .mcp.json header by the CLI.
         std_cmd.env("LINGCODE_CLOUD_TOKEN", tok);

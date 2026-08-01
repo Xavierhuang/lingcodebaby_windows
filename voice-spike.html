@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Voice spike — LingCodeBaby</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font: 14px/1.55 "Helvetica Neue", Helvetica, Arial, sans-serif;
+    margin: 0; padding: 24px; max-width: 760px;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.lede { margin: 0 0 20px; opacity: .7; }
+  button {
+    font: inherit; padding: 8px 16px; border-radius: 8px; cursor: pointer;
+    border: 1px solid rgba(128,128,128,.4); background: transparent;
+  }
+  button:disabled { opacity: .4; cursor: default; }
+  table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid rgba(128,128,128,.2); vertical-align: top; }
+  th { font-weight: 600; width: 34%; }
+  td.v { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; word-break: break-word; }
+  .pass::before { content: "PASS "; color: #16A34A; font-weight: 700; }
+  .fail::before { content: "FAIL "; color: #DC2626; font-weight: 700; }
+  .info::before { content: "note "; opacity: .6; font-weight: 700; }
+  #verdict { margin-top: 22px; padding: 14px 16px; border-radius: 10px; border: 1px solid rgba(128,128,128,.3); display: none; }
+  #verdict.go    { border-color: #16A34A; }
+  #verdict.stop  { border-color: #DC2626; }
+  pre { background: rgba(128,128,128,.1); padding: 10px 12px; border-radius: 8px; overflow-x: auto; font-size: 12px; }
+</style>
+</head>
+<body>
+<h1>Voice spike</h1>
+<p class="lede">
+  Answers the one question that gates the whole voice feature: can this webview
+  capture microphone audio and play audio back? Run it <strong>inside the app</strong>
+  (not a normal browser) — WebView2 is what actually has to work.
+</p>
+
+<button id="run">Run the spike (records ~2s)</button>
+
+<table id="results"></table>
+<div id="verdict"></div>
+
+<script type="module">
+const T = document.getElementById('results');
+const V = document.getElementById('verdict');
+let hardFail = false;
+
+function row(label, verdict, value) {
+  const tr = document.createElement('tr');
+  const th = document.createElement('th');
+  th.textContent = label;
+  const td = document.createElement('td');
+  td.className = 'v ' + verdict;
+  td.textContent = value;
+  tr.append(th, td);
+  T.append(tr);
+  if (verdict === 'fail') hardFail = true;
+}
+
+// 1. Environment — is this actually the Tauri webview, and which engine?
+function checkEnv() {
+  const isTauri = !!(window.__TAURI__ || window.__TAURI_INTERNALS__);
+  row('Running inside Tauri', isTauri ? 'pass' : 'info',
+      isTauri ? 'yes' : 'no — open this in the app, results from a plain browser do not count');
+  const ua = navigator.userAgent;
+  const engine = /Edg\//.test(ua) ? 'WebView2 / Edge (Chromium)'
+               : /AppleWebKit/.test(ua) && !/Chrome/.test(ua) ? 'WebKit'
+               : 'Chromium-family';
+  row('Webview engine', 'info', engine);
+  row('User agent', 'info', ua);
+  row('Secure context', window.isSecureContext ? 'pass' : 'fail',
+      String(window.isSecureContext) + (window.isSecureContext ? '' : ' — getUserMedia requires one'));
+}
+
+// 2. getUserMedia — presence, then an actual permission grant.
+async function checkCapture() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    row('getUserMedia available', 'fail', 'navigator.mediaDevices.getUserMedia is undefined');
+    return null;
+  }
+  row('getUserMedia available', 'pass', 'yes');
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const track = stream.getAudioTracks()[0];
+    row('Microphone permission', 'pass', 'granted');
+    row('Audio track', track ? 'pass' : 'fail',
+        track ? `${track.label || '(unnamed device)'} — enabled=${track.enabled}` : 'no audio track in stream');
+    return stream;
+  } catch (e) {
+    row('Microphone permission', 'fail', `${e.name}: ${e.message}`);
+    row('What this means', 'info',
+        'WebView2 may need a permission handler on the Rust side, or the OS mic privacy setting is off.');
+    return null;
+  }
+}
+
+// 3. MediaRecorder — which container/codec we can actually produce.
+function pickMime() {
+  const candidates = [
+    'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus',
+    'audio/mp4', 'audio/mpeg', 'audio/wav',
+  ];
+  if (typeof MediaRecorder === 'undefined') return { supported: [], chosen: null };
+  const supported = candidates.filter(t => {
+    try { return MediaRecorder.isTypeSupported(t); } catch { return false; }
+  });
+  return { supported, chosen: supported[0] || null };
+}
+
+async function checkRecord(stream) {
+  if (typeof MediaRecorder === 'undefined') {
+    row('MediaRecorder available', 'fail', 'MediaRecorder is undefined');
+    return null;
+  }
+  const { supported, chosen } = pickMime();
+  row('MediaRecorder available', 'pass', 'yes');
+  row('Supported mime types', supported.length ? 'pass' : 'fail',
+      supported.length ? supported.join('\n') : 'none of the tested types are supported');
+  if (!stream || !chosen) return null;
+  row('Chosen mime type', 'info', chosen + '  ← the server transcribe route must accept this');
+
+  return new Promise(resolve => {
+    let rec;
+    try { rec = new MediaRecorder(stream, { mimeType: chosen }); }
+    catch (e) { row('Recording', 'fail', `constructor threw: ${e.message}`); return resolve(null); }
+    const chunks = [];
+    rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+    rec.onerror = e => row('Recording', 'fail', `onerror: ${e.error?.message || 'unknown'}`);
+    rec.onstop = () => {
+      const blob = new Blob(chunks, { type: chosen });
+      row('Recorded audio', blob.size > 0 ? 'pass' : 'fail',
+          `${chunks.length} chunk(s), ${blob.size} bytes` +
+          (blob.size === 0 ? ' — capture produced silence/nothing' : ''));
+      resolve(blob.size > 0 ? blob : null);
+    };
+    rec.start(250);           // timeslice, so we get streaming chunks like the real thing
+    setTimeout(() => rec.stop(), 2000);
+  });
+}
+
+// 4. Blob playback — the exact mechanism the proxied TTS audio will use.
+async function checkPlayback(blob) {
+  if (!blob) { row('Blob playback', 'fail', 'skipped — no recorded audio to play'); return; }
+  const url = URL.createObjectURL(blob);
+  const audio = new Audio(url);
+  audio.volume = 0.25;
+  try {
+    await audio.play();
+    // Give it a moment to actually start advancing.
+    await new Promise(r => setTimeout(r, 400));
+    const started = audio.currentTime > 0 || audio.readyState >= 2;
+    row('Blob playback', started ? 'pass' : 'fail',
+        started ? `play() resolved, currentTime=${audio.currentTime.toFixed(2)}s, readyState=${audio.readyState}`
+                : 'play() resolved but the element never advanced');
+    audio.pause();
+  } catch (e) {
+    row('Blob playback', 'fail', `${e.name}: ${e.message} — likely an autoplay gesture requirement`);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+// 5. speechSynthesis — informational only. We chose proxied TTS precisely
+//    because this is unreliable in WebView2; if it works it's a free fast path.
+function checkSynthesis() {
+  if (!('speechSynthesis' in window)) {
+    row('speechSynthesis (optional)', 'info', 'absent — expected in WebView2; proxied TTS is the plan anyway');
+    return;
+  }
+  const voices = window.speechSynthesis.getVoices();
+  row('speechSynthesis (optional)', 'info',
+      voices.length ? `present, ${voices.length} voice(s) — could be a free fast path`
+                    : 'present but 0 voices (often means unusable); proxied TTS is the plan anyway');
+}
+
+function checkAudioContext() {
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  row('AudioContext (fallback)', Ctx ? 'pass' : 'info', Ctx ? 'available' : 'absent');
+}
+
+document.getElementById('run').addEventListener('click', async (ev) => {
+  ev.target.disabled = true;
+  T.innerHTML = ''; V.style.display = 'none'; hardFail = false;
+
+  checkEnv();
+  const stream = await checkCapture();
+  const blob = await checkRecord(stream);
+  await checkPlayback(blob);
+  checkSynthesis();
+  checkAudioContext();
+  if (stream) stream.getTracks().forEach(t => t.stop());
+
+  V.className = hardFail ? 'stop' : 'go';
+  V.style.display = 'block';
+  V.innerHTML = hardFail
+    ? '<strong>Stop here.</strong> Something required failed above. The voice feature cannot work in this webview until it passes — do not build the rest on top of it. Send me the failing rows.'
+    : '<strong>Clear to proceed.</strong> Capture and playback both work in this webview. Note the chosen mime type above — the transcribe route has to accept that container.';
+  ev.target.disabled = false;
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,63 @@
+name: CI
+
+# Compile + typecheck on every push. Scoped to `cargo check` rather than a full
+# `tauri build`: bundling takes many minutes and produces installers nobody
+# looks at, whereas the question we actually need answered on each commit is
+# "does it still compile".
+#
+# Linux dependency list and toolchain steps are copied from release.yml so the
+# two don't drift — if a build dep changes there, change it here too.
+
+on:
+  push:
+    branches-ignore: []
+  pull_request:
+
+jobs:
+  rust:
+    name: cargo check + test
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev librsvg2-dev patchelf \
+            build-essential curl wget file libxdo-dev libssl-dev libgtk-3-dev \
+            libayatana-appindicator3-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      # tauri.conf.json points frontendDist at ../dist, which must exist before
+      # the crate will configure. Building the frontend first is cheaper than
+      # special-casing the Rust build.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+
+      - run: cargo check --manifest-path src-tauri/Cargo.toml --all-targets
+      # approval.rs carries the tier-policy unit tests — the security-critical
+      # part of hands-free voice mode.
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --verbose
+
+  frontend:
+    name: typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      # `npm run build` is `tsc --noEmit && vite build`, so this covers the
+      # strict typecheck as well as the bundle.
+      - run: npm run build

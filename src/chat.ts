@@ -1,4 +1,5 @@
 import { claudeSend, ChatEvent, api } from "./api";
+import { VoiceSession, type VoicePhase } from "./voice";
 
 interface Entry { el: HTMLElement; clean: boolean; }
 
@@ -26,18 +27,33 @@ export class ChatPanel {
   private entries: Entry[] = [];
   private lastAssistantText = "";
 
+  // ── Hands-free voice mode ────────────────────────────────────────────────
+  // Hidden entirely unless the account has voice available, so the composer is
+  // unchanged for everyone else. Push-to-talk rather than always-listening: an
+  // open mic in a shared room is a privacy problem, and it removes any need for
+  // wake-word detection.
+  private micBtn: HTMLButtonElement;
+  private voiceBar: HTMLElement;
+  private voice: VoiceSession | null = null;
+  private voiceReady = false;
+
   constructor(root: HTMLElement) {
     root.innerHTML = `
       <div class="transcript"></div>
       <div class="options"></div>
+      <div class="voice-bar" hidden></div>
       <div class="chat-input-row">
         <textarea class="chat-input" placeholder="Ask Claude…" rows="1"></textarea>
+        <button class="mic-btn" title="Hold to talk" hidden>🎤</button>
         <button class="send-btn">Send</button>
       </div>`;
     this.transcript = root.querySelector(".transcript") as HTMLElement;
     this.optionsEl = root.querySelector(".options") as HTMLElement;
     this.input = root.querySelector(".chat-input") as HTMLTextAreaElement;
     this.sendBtn = root.querySelector(".send-btn") as HTMLButtonElement;
+    this.micBtn = root.querySelector(".mic-btn") as HTMLButtonElement;
+    this.voiceBar = root.querySelector(".voice-bar") as HTMLElement;
+    this.wireVoice();
     this.dots = document.createElement("span");
     this.dots.className = "dots";
 
@@ -49,6 +65,88 @@ export class ChatPanel {
       this.input.style.height = "auto";
       this.input.style.height = Math.min(this.input.scrollHeight, 140) + "px";
     };
+  }
+
+  /** Reveal the mic only if the account can actually use voice. */
+  private wireVoice() {
+    void (async () => {
+      try {
+        const st = await api.voiceStatus();
+        this.voiceReady = st.signed_in && st.transcribe && st.speak;
+        this.micBtn.hidden = !this.voiceReady;
+        if (!this.voiceReady && st.reason) this.micBtn.title = st.reason;
+      } catch {
+        this.micBtn.hidden = true;   // voice unavailable — composer unchanged
+      }
+    })();
+
+    // Push-to-talk: hold the button (or Ctrl/Cmd+Shift+Space) to speak.
+    // pointerup is bound on the window so releasing off the button still stops
+    // the recording instead of leaving the mic open.
+    const down = (e: Event) => { e.preventDefault(); void this.startVoice(); };
+    const up = () => this.voice?.endListening();
+    this.micBtn.addEventListener("pointerdown", down);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("keydown", (e) => {
+      if (!this.voiceReady) return;
+      if (e.code === "Space" && e.shiftKey && (e.ctrlKey || e.metaKey) && !e.repeat) {
+        e.preventDefault(); void this.startVoice();
+      }
+    });
+    window.addEventListener("keyup", (e) => {
+      if (e.code === "Space" || e.key === "Shift") up();
+    });
+  }
+
+  /** Lazily create the session on first use so we don't hold the mic open (and
+   *  keep the OS recording indicator lit) for people who never use voice. */
+  private async startVoice() {
+    if (!this.voiceReady) return;
+    if (!this.voice) {
+      const cwd = this.getCwd();
+      if (!cwd) { this.setVoiceBar("Open a folder first."); return; }
+      const s = new VoiceSession();
+      s.onPhase = (p, detail) => this.renderVoicePhase(p, detail);
+      s.onTranscript = (t) => this.postNote(`🎤 ${t}`);
+      s.onAgentEvent = (e) => this.handleEvent(e);
+      try {
+        await s.start(cwd, this.getModel());
+      } catch (err) {
+        this.setVoiceBar(String(err));
+        return;
+      }
+      this.voice = s;
+    }
+    this.voice.beginListening();
+  }
+
+  /** Stop voice mode and release the microphone. */
+  async stopVoice() {
+    await this.voice?.stop();
+    this.voice = null;
+    this.setVoiceBar("");
+  }
+
+  private renderVoicePhase(p: VoicePhase, detail?: string) {
+    const label: Record<VoicePhase, string> = {
+      off: "",
+      idle: "Hold the mic and speak",
+      listening: "Listening…",
+      thinking: "Working out what you said…",
+      confirming: "Say “go” to run it, or “cancel”",
+      running: "Running…",
+      approving: "Say “confirm run” to allow, or “deny”",
+      speaking: "Speaking…",
+    };
+    this.micBtn.classList.toggle("recording", p === "listening");
+    this.setVoiceBar(detail && (p === "confirming" || p === "approving")
+      ? `${label[p]} — ${detail}`
+      : label[p]);
+  }
+
+  private setVoiceBar(text: string) {
+    this.voiceBar.textContent = text;
+    this.voiceBar.hidden = !text;
   }
 
   postNote(text: string) {
