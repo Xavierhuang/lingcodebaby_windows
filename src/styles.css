@@ -119,6 +119,24 @@ button.tb:disabled { background: var(--muted); cursor: default; opacity: 0.7; }
   padding: 0 16px; font-weight: 600; cursor: pointer;
 }
 .send-btn:disabled { background: var(--muted); cursor: default; }
+
+/* ── Hands-free voice mode ───────────────────────────────────────────────── */
+/* Hidden until the account has voice; the composer is unchanged otherwise. */
+.mic-btn {
+  font-size: 16px; line-height: 1; padding: 0 10px; align-self: stretch;
+  background: transparent; color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px; cursor: pointer;
+  user-select: none; -webkit-user-select: none;   /* holding to talk must not select text */
+  touch-action: none;                              /* pointerdown shouldn't scroll */
+}
+.mic-btn:hover { background: var(--hover); }
+.mic-btn.recording { background: #DC2626; border-color: #DC2626; color: #fff; }
+/* One line of state: what the loop is doing and what to say next. */
+.voice-bar {
+  padding: 6px 10px; border-top: 1px solid var(--border);
+  font-size: 12px; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .dots { display: inline-block; width: 28px; text-align: left; color: var(--accent); }
 
 /* ---- modals + context menu ---- */

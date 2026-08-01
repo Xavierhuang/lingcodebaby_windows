@@ -1,10 +1,73 @@
 mod anthropic_key;
+mod approval;
 mod chat;
 mod deploy;
 mod endpoint;
 mod fsops;
 mod prefs;
 mod quinny;
+mod voice;
+
+/// App-lifetime home for the hands-free approval gate.
+///
+/// The local MCP approval server is started once (first voice turn) and then
+/// reused: its port and bearer token stay stable for the process. Only the
+/// project root changes per turn, so that lives behind its own lock and is read
+/// at decision time.
+pub struct VoiceApprovalHandle {
+    state: std::sync::Arc<approval::ApprovalState>,
+    root: std::sync::Arc<std::sync::Mutex<std::path::PathBuf>>,
+    /// Cached `--mcp-config` JSON once the server is up. `None` until then.
+    started: tokio::sync::Mutex<Option<String>>,
+}
+
+impl VoiceApprovalHandle {
+    fn new() -> Self {
+        Self {
+            state: std::sync::Arc::new(approval::ApprovalState::default()),
+            root: std::sync::Arc::new(std::sync::Mutex::new(std::path::PathBuf::new())),
+            started: tokio::sync::Mutex::new(None),
+        }
+    }
+
+    /// Start the approval server if it isn't running, and point it at `cwd`.
+    /// Returns the `--mcp-config` payload and the permission tool name.
+    pub async fn ensure_started(
+        &self,
+        app: &tauri::AppHandle,
+        cwd: std::path::PathBuf,
+    ) -> Result<(String, &'static str), String> {
+        // Point the gate at this turn's project before anything can be decided.
+        if let Ok(mut g) = self.root.lock() {
+            *g = cwd;
+        }
+        let mut started = self.started.lock().await;
+        if let Some(cfg) = started.as_ref() {
+            return Ok((cfg.clone(), approval::ApprovalServer::permission_tool_name()));
+        }
+        // Risky requests are pushed to the webview, which speaks them and calls
+        // back in via `voice_approve_resolve`.
+        let app_for_speak = app.clone();
+        let speak: std::sync::Arc<dyn Fn(approval::Pending) + Send + Sync> =
+            std::sync::Arc::new(move |pending| {
+                voice::emit_approval_request(&app_for_speak, &pending);
+            });
+        let server = approval::start_with_state(self.root.clone(), speak, self.state.clone()).await?;
+        let cfg = server.mcp_config_json();
+        *started = Some(cfg.clone());
+        Ok((cfg, approval::ApprovalServer::permission_tool_name()))
+    }
+
+    pub fn resolve(&self, id: &str, allow: bool) -> bool {
+        self.state.resolve(id, allow)
+    }
+
+    /// Deny anything still outstanding — called when a turn ends so a spoken
+    /// question never outlives the turn that asked it.
+    pub fn drain_deny(&self) {
+        self.state.drain_deny();
+    }
+}
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -218,6 +281,7 @@ pub fn run() {
                 }
             }
         })
+        .manage(VoiceApprovalHandle::new())
         .invoke_handler(tauri::generate_handler![
             fsops::list_dir,
             fsops::read_text_file,
@@ -232,6 +296,11 @@ pub fn run() {
             prefs::set_prefs,
             chat::claude_send,
             chat::claude_abort,
+            voice::voice_status,
+            voice::voice_shape,
+            voice::voice_transcribe,
+            voice::voice_speak,
+            voice::voice_approve_resolve,
             deploy::deploy_api_base,
             deploy::deploy_signin,
             deploy::deploy_load_config,
