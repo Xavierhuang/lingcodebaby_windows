@@ -3,6 +3,7 @@ mod chat;
 mod deploy;
 mod endpoint;
 mod fsops;
+mod history;
 mod prefs;
 mod quinny;
 
@@ -20,14 +21,22 @@ struct MenuState {
 }
 
 fn build_menu(app: &tauri::AppHandle, prefs: &prefs::Prefs) -> tauri::Result<(Menu<Wry>, MenuState)> {
-    // Application menu
+    // Application menu — mirrors the Mac app menu (AppDelegate.setupMenu): the
+    // auth-path items (API key, custom endpoint, sign out) live here rather than
+    // under View, so the two platforms read the same.
     let app_menu = Submenu::with_items(
         app,
         "LingCodeBaby",
         true,
         &[
             &PredefinedMenuItem::about(app, Some("LingCodeBaby"), None)?,
+            &MenuItem::with_id(app, "welcome", "Welcome / Set Up…", true, None::<&str>)?,
+            &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "check_updates", "Check for Updates…", true, None::<&str>)?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, "anthropic_key", "Set Anthropic API Key…", true, None::<&str>)?,
+            &MenuItem::with_id(app, "custom_endpoint", "Custom Endpoint…", true, None::<&str>)?,
+            &MenuItem::with_id(app, "sign_out", "Sign Out", true, None::<&str>)?,
             &PredefinedMenuItem::separator(app)?,
             &PredefinedMenuItem::hide(app, None)?,
             &PredefinedMenuItem::quit(app, None)?,
@@ -77,14 +86,17 @@ fn build_menu(app: &tauri::AppHandle, prefs: &prefs::Prefs) -> tauri::Result<(Me
     };
     let m_lingmodel = mk_model("lingmodel", "LingModel — LingCode account")?;
     let m_default = mk_model("default", "Default (CLI / account)")?;
-    let m_opus = mk_model("opus", "Opus — highest quality")?;
+    let m_opus = mk_model("opus", "Opus — highest quality, highest cost")?;
     let m_sonnet = mk_model("sonnet", "Sonnet — balanced (recommended)")?;
-    let m_haiku = mk_model("haiku", "Haiku — fastest")?;
+    // Fable is on the Mac model list (AppDelegate.setupMenu); chat.rs maps the
+    // alias to the real `claude-fable-5` id when it builds the CLI args.
+    let m_fable = mk_model("fable", "Fable — Claude 5, fast")?;
+    let m_haiku = mk_model("haiku", "Haiku — fastest, lowest cost")?;
     let model_menu = Submenu::with_items(
         app,
         "Claude Model",
         true,
-        &[&m_lingmodel, &m_default, &m_opus, &m_sonnet, &m_haiku],
+        &[&m_lingmodel, &m_default, &m_opus, &m_sonnet, &m_fable, &m_haiku],
     )?;
 
     let thinking = CheckMenuItem::with_id(app, "toggle_thinking", "Show Claude Thinking", true, false, Some("CmdOrCtrl+Shift+T"))?;
@@ -99,33 +111,55 @@ fn build_menu(app: &tauri::AppHandle, prefs: &prefs::Prefs) -> tauri::Result<(Me
             &thinking,
             &stop,
             &PredefinedMenuItem::separator(app)?,
+            // ⇧⌘K on Mac — clears the chat AND the saved history for the folder,
+            // and starts a fresh CLI session.
+            &MenuItem::with_id(app, "new_conversation", "New Conversation (Clear Chat)", true, Some("CmdOrCtrl+Shift+K"))?,
             &sounds,
             &PredefinedMenuItem::separator(app)?,
             &model_menu,
-            &MenuItem::with_id(app, "custom_endpoint", "Custom Endpoint…", true, None::<&str>)?,
-            &MenuItem::with_id(app, "anthropic_key", "Anthropic API Key…", true, None::<&str>)?,
+        ],
+    )?;
+
+    // LingCode Cloud menu — discoverable home for the managed backend (Postgres
+    // + auth + storage + functions). The wiring otherwise happens silently when
+    // a signed-in user sends a message; these items make it explicit. Mirrors
+    // the Mac "LingCode Cloud" menu.
+    let cloud_menu = Submenu::with_items(
+        app,
+        "LingCode Cloud",
+        true,
+        &[
+            &MenuItem::with_id(app, "connect_backend", "Connect Backend to This Folder", true, None::<&str>)?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, "backend_console", "Open Backend Console", true, None::<&str>)?,
         ],
     )?;
 
     // Help menu — parallels Mac's "LingCode Baby Help" (LCBHelpWindowController)
-    // and the Welcome/onboarding entry (LCBOnboarding show:).
+    // and "Visit lingcode.dev". The Welcome/onboarding entry lives in the app
+    // menu, as it does on Mac.
     let help_menu = Submenu::with_items(
         app,
         "Help",
         true,
         &[
             &MenuItem::with_id(app, "help_window", "LingCodeBaby Help", true, Some("F1"))?,
-            &MenuItem::with_id(app, "welcome", "Welcome to LingCodeBaby…", true, None::<&str>)?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, "visit_website", "Visit lingcode.dev", true, None::<&str>)?,
         ],
     )?;
 
-    let menu = Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu, &view_menu, &help_menu])?;
+    let menu = Menu::with_items(
+        app,
+        &[&app_menu, &file_menu, &edit_menu, &view_menu, &cloud_menu, &help_menu],
+    )?;
 
     let mut models = HashMap::new();
     models.insert("lingmodel".to_string(), m_lingmodel);
     models.insert("default".to_string(), m_default);
     models.insert("opus".to_string(), m_opus);
     models.insert("sonnet".to_string(), m_sonnet);
+    models.insert("fable".to_string(), m_fable);
     models.insert("haiku".to_string(), m_haiku);
 
     Ok((
@@ -154,6 +188,11 @@ fn emit_focused(app: &tauri::AppHandle, payload: String) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Headless paths run before any window is created, so `--deploy` works from
+    // a terminal or CI without flashing a GUI.
+    if let Some(code) = deploy::run_cli() {
+        std::process::exit(code);
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -228,16 +267,24 @@ pub fn run() {
             fsops::trash_path,
             fsops::reveal_in_explorer,
             fsops::scaffold_agent_files,
+            fsops::cloud_connect_backend,
+            fsops::cloud_autoconnect_backend,
             prefs::get_prefs,
             prefs::set_prefs,
             chat::claude_send,
             chat::claude_abort,
+            history::history_load,
+            history::history_save,
+            history::history_clear,
+            history::attach_save,
+            history::attach_remove,
             deploy::deploy_api_base,
             deploy::deploy_signin,
             deploy::deploy_load_config,
             deploy::deploy_save_config,
             deploy::deploy_get_saved_token,
             deploy::deploy_save_token,
+            deploy::deploy_delete_token,
             deploy::deploy_slugify,
             deploy::deploy_has_index,
             deploy::deploy_check,

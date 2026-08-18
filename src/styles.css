@@ -1,3 +1,11 @@
+/* ---- theme tokens ----------------------------------------------------------
+   Three states, because the viewer has three: "system" stamps nothing on <html>
+   and only prefers-color-scheme separates light from dark, while an explicit
+   choice stamps data-theme and must beat the media query in BOTH directions.
+   So the dark tokens are declared twice on purpose — once guarded against an
+   explicit light choice, once for an explicit dark choice. Components read the
+   tokens only; never declare a colour inside a media/[data-theme] block, or it
+   won't apply in the unstamped state. See theme.ts. */
 :root {
   --bg: #ffffff;
   --panel: #f5f5f7;
@@ -8,13 +16,17 @@
   --accent: #2563eb;
   --sel: #dbe9ff;
   --hover: #e8e8ec;
+  --diff-add: #1a7f37;
+  --diff-del: #cf222e;
+  --tool: #2a8a8a;
   font-family: -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
   font-size: 13px;
   color: var(--text);
+  color-scheme: light;
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #1e1e1e;
     --panel: #252526;
     --panel-2: #2d2d30;
@@ -23,7 +35,26 @@
     --muted: #9b9b9f;
     --sel: #2b4a78;
     --hover: #333336;
+    --diff-add: #4ec26f;
+    --diff-del: #ff7b72;
+    --tool: #56b6c2;
+    color-scheme: dark;
   }
+}
+
+:root[data-theme="dark"] {
+  --bg: #1e1e1e;
+  --panel: #252526;
+  --panel-2: #2d2d30;
+  --border: #3a3a3c;
+  --text: #e6e6e6;
+  --muted: #9b9b9f;
+  --sel: #2b4a78;
+  --hover: #333336;
+  --diff-add: #4ec26f;
+  --diff-del: #ff7b72;
+  --tool: #56b6c2;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -94,11 +125,11 @@ button.tb:disabled { background: var(--muted); cursor: default; opacity: 0.7; }
 .msg .role { font-weight: 700; display: block; margin-bottom: 2px; }
 .msg.note { font-size: 11px; color: var(--muted); }
 .msg.thinking { font-style: italic; font-size: 11.5px; color: var(--muted); }
-.msg.tool { font-family: Menlo, Consolas, monospace; font-size: 11px; color: #2a8a8a; }
+.msg.tool { font-family: Menlo, Consolas, monospace; font-size: 11px; color: var(--tool); }
 .msg.edit { font-family: Menlo, Consolas, monospace; font-size: 11px; }
-.msg.edit .add { color: #1a7f37; }
-.msg.edit .del { color: #cf222e; }
-.msg.edit .file { color: #2a8a8a; font-weight: 600; }
+.msg.edit .add { color: var(--diff-add); }
+.msg.edit .del { color: var(--diff-del); }
+.msg.edit .file { color: var(--tool); font-weight: 600; }
 .thinking-line { color: var(--muted); font-style: italic; font-size: 11.5px; margin-bottom: 8px; }
 
 .options { display: flex; flex-direction: column; gap: 6px; padding: 4px 10px 10px; }
@@ -107,6 +138,19 @@ button.tb:disabled { background: var(--muted); cursor: default; opacity: 0.7; }
   padding: 8px 12px; font: inherit; cursor: pointer; white-space: normal;
 }
 .opt:hover { background: var(--hover); }
+
+.msg a.chat-link { color: var(--accent); text-decoration: underline; cursor: pointer; }
+
+/* Pasted/dropped attachments queued for the next message. */
+.attachments { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 10px; }
+.attachments:not(:empty) { padding-bottom: 6px; }
+.attach-chip {
+  font: inherit; font-size: 11px; padding: 3px 9px; border-radius: 11px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--sel); color: var(--text);
+}
+.attach-chip:hover { filter: brightness(0.96); }
+.attach-chip.queued { background: var(--panel-2); }
+.chat-body.drop-target { outline: 2px dashed var(--accent); outline-offset: -4px; }
 
 .chat-input-row { padding: 8px; border-top: 1px solid var(--border); display: flex; gap: 6px; align-items: flex-end; }
 .chat-input {

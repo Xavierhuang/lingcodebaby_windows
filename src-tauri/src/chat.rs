@@ -46,8 +46,74 @@ const CLOUD_BACKEND_HINT: &str = "\n\nA LingCode Cloud managed backend (Postgres
 /// the agent knows it can reach for it. Verbatim from ClaudeChat.m:1327-1348.
 const QUINNY_HINT: &str = "\n\nQuinny — an executable specification language, BUNDLED with this app and always on your PATH (also $QUINNY_BIN); just run `quinny …` via bash, no install needed. It VERIFIES code against acceptance criteria — it does NOT write the code for you (you write the code; you're better at it than a decomposing pipeline). Reach for it when a task has real correctness-critical LOGIC: pricing, cart/checkout math, business rules, state machines, validation, auth, parsing, calculations — the parts where a silent bug is expensive. Do NOT use it for UI/layout/styling, static pages, simple scripts, or one-off edits — it can't gate those and adds no value.\nWhen it fits:\n1. `quinny scaffold \"<what to build>\" -o <dir>` — drafts a `.qn` contract scoped to the verifiable logic, plus a module stub. (The user can describe it in plain English; scaffold writes the acceptance criteria for them.)\n2. Implement the module — write the real code.\n3. `quinny verify <contract>.qn <dir>` — runs the criteria against your code and reports per-criterion PASS/FAIL. Keep fixing until all gating (test) criteria pass.\n4. To lock it in, `quinny verify … --emit <name>_contract_test.py` and commit the .qn + suite so it re-runs deterministically in CI with no model.\nQuick reference: `quinny --help`. Rationale: agents write plausible code that 'looks done' but misses edge cases; verify makes 'is it correct?' an objective command, and the contract keeps catching regressions after you move on. (`quinny build`/`gen` code generation is experimental — prefer writing the code yourself.)";
 
-/// Locate a `claude` executable, preferring a real binary over a shell shim.
-fn find_claude() -> Option<PathBuf> {
+/// Where npm hides the real binary relative to a shim directory: an npm global
+/// install drops `claude.cmd` in `%APPDATA%\npm` and the actual executable under
+/// that folder's `node_modules`.
+#[cfg(target_os = "windows")]
+const NPM_NESTED_EXE: &str = "node_modules/@anthropic-ai/claude-code/bin/claude.exe";
+
+/// Read an npm `.cmd` shim and recover the real executable it calls.
+///
+/// A `.cmd` shim CANNOT be spawned with our arguments. Since the fix for
+/// CVE-2024-24576 ("BatBadBut"), Rust's `std::process::Command` refuses to run a
+/// `.bat`/`.cmd` whose arguments it cannot safely escape for `cmd.exe`, failing
+/// with `InvalidInput` — surfaced to the user as the bare, unactionable "batch
+/// file arguments are invalid". Our `--append-system-prompt` argument is a long
+/// multi-line string containing newlines, backticks and `%`, so it can never be
+/// escaped and the spawn ALWAYS fails. Resolving past the shim to the real
+/// `.exe` sidesteps `cmd.exe` entirely.
+///
+/// The shim's payload line looks like:
+///   `"%dp0%\node_modules\@anthropic-ai\claude-code\bin\claude.exe"   %*`
+#[cfg(target_os = "windows")]
+fn resolve_cmd_shim(shim: &std::path::Path) -> Option<PathBuf> {
+    let dir = shim.parent()?;
+    let text = std::fs::read_to_string(shim).ok()?;
+    for line in text.lines() {
+        // Skip every line that isn't the quoted payload — `?` here would abandon
+        // the whole search on the shim's first `@ECHO off`.
+        let Some(rest) = line.trim().strip_prefix('"') else {
+            continue;
+        };
+        let quoted = rest.split('"').next().unwrap_or("");
+        if quoted.is_empty() {
+            continue;
+        }
+        // `%dp0%` / `%~dp0` already end in a separator, so the shim's own
+        // separator leaves a doubled one — trim both.
+        let rel = quoted.replace("%~dp0", "").replace("%dp0%", "");
+        let rel = rel.trim_start_matches(['\\', '/']);
+        let candidate = dir.join(rel);
+        if is_native_exe(&candidate) {
+            return Some(candidate);
+        }
+    }
+    // Shim didn't parse (npm changed its template?) — try the conventional
+    // layout directly before giving up.
+    let conventional = dir.join(NPM_NESTED_EXE);
+    is_native_exe(&conventional).then_some(conventional)
+}
+
+/// A file we can spawn with arbitrary arguments. On Windows that means a real
+/// PE image, never a `.cmd`/`.bat` shim (see `resolve_cmd_shim`).
+fn is_native_exe(path: &std::path::Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        return path
+            .extension()
+            .map(|e| e.eq_ignore_ascii_case("exe"))
+            .unwrap_or(false);
+    }
+    #[cfg(not(target_os = "windows"))]
+    true
+}
+
+/// Locate a `claude` executable. Returns a spawnable native binary or an
+/// actionable error — never a batch shim.
+fn find_claude() -> Result<PathBuf, String> {
     let home = dirs::home_dir();
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Some(h) = &home {
@@ -55,7 +121,13 @@ fn find_claude() -> Option<PathBuf> {
         {
             candidates.push(h.join(".local/bin/claude.exe"));
             candidates.push(h.join(".claude/local/claude.exe"));
-            candidates.push(PathBuf::from(std::env::var("APPDATA").unwrap_or_default()).join("npm/claude.cmd"));
+            // npm global installs: the shim is on PATH, the real exe is not.
+            candidates.push(h.join(".claude/local").join(NPM_NESTED_EXE));
+            for var in ["APPDATA", "LOCALAPPDATA"] {
+                if let Ok(base) = std::env::var(var) {
+                    candidates.push(PathBuf::from(&base).join("npm").join(NPM_NESTED_EXE));
+                }
+            }
         }
         #[cfg(not(target_os = "windows"))]
         {
@@ -74,28 +146,101 @@ fn find_claude() -> Option<PathBuf> {
         }
     }
     for c in candidates {
-        if c.is_file() {
-            return Some(c);
+        if is_native_exe(&c) {
+            return Ok(c);
         }
     }
+
     // Fall back to PATH resolution.
     let exe = if cfg!(windows) { "claude.exe" } else { "claude" };
+    #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
+    let mut shim_seen: Option<PathBuf> = None;
     if let Ok(path) = std::env::var("PATH") {
         for dir in std::env::split_paths(&path) {
             let p = dir.join(exe);
-            if p.is_file() {
-                return Some(p);
+            if is_native_exe(&p) {
+                return Ok(p);
             }
             #[cfg(target_os = "windows")]
             {
                 let cmd = dir.join("claude.cmd");
                 if cmd.is_file() {
-                    return Some(cmd);
+                    if let Some(real) = resolve_cmd_shim(&cmd) {
+                        return Ok(real);
+                    }
+                    shim_seen.get_or_insert(cmd);
                 }
             }
         }
     }
-    None
+
+    // A shim on PATH means Claude Code IS installed and logged in — the problem
+    // is purely that we cannot hand a batch file our arguments. Say that, rather
+    // than claiming it isn't installed and sending the user to re-run
+    // `claude login` (which would not help).
+    if let Some(shim) = shim_seen {
+        return Err(format!(
+            "Found {} but not the executable it wraps, and Windows can't pass \
+             arguments through a .cmd shim. Reinstall with `npm install -g \
+             @anthropic-ai/claude-code` so the bundled claude.exe is present.",
+            shim.display()
+        ));
+    }
+    Err("Could not find the `claude` CLI. Install Claude Code and sign in with `claude login`.".into())
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod shim_tests {
+    use super::resolve_cmd_shim;
+
+    /// The npm shim template, verbatim. Parsing it is what stands between the
+    /// user and "batch file arguments are invalid".
+    #[test]
+    fn resolves_the_npm_shim_to_the_real_exe() {
+        let dir = std::env::temp_dir().join(format!("lcb-shim-{}", std::process::id()));
+        let nested = dir.join("node_modules/@anthropic-ai/claude-code/bin");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("claude.exe"), b"MZ").unwrap();
+        let shim = dir.join("claude.cmd");
+        std::fs::write(
+            &shim,
+            "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\n\
+             SETLOCAL\r\nCALL :find_dp0\r\n\"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe\"   %*\r\n",
+        )
+        .unwrap();
+
+        let resolved = resolve_cmd_shim(&shim).expect("shim should resolve");
+        assert_eq!(resolved, nested.join("claude.exe"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Diagnostic for "batch file arguments are invalid" reports: prints what
+    /// this machine actually resolves to. Ignored by default since the answer is
+    /// environment-specific. Run with:
+    ///   cargo test resolves_on_this_machine -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn resolves_on_this_machine() {
+        match super::find_claude() {
+            Ok(p) => {
+                println!("resolved: {}", p.display());
+                assert!(super::is_native_exe(&p), "must be a spawnable .exe, not a shim");
+            }
+            Err(e) => println!("not resolved: {e}"),
+        }
+    }
+
+    /// A shim pointing at nothing must fail cleanly, so the caller can explain
+    /// itself instead of returning a phantom path that fails at spawn time.
+    #[test]
+    fn unresolvable_shim_returns_none() {
+        let dir = std::env::temp_dir().join(format!("lcb-shim-bad-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let shim = dir.join("claude.cmd");
+        std::fs::write(&shim, "@ECHO off\r\n\"%dp0%\\nope\\claude.exe\" %*\r\n").unwrap();
+        assert!(resolve_cmd_shim(&shim).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 /// Extract a short one-line detail from a tool_use input object.
@@ -146,6 +291,37 @@ fn parse_ask_user(text: &str) -> Option<(String, Vec<String>)> {
     Some((question, options))
 }
 
+/// Map a picker alias to the id the CLI expects. Only Fable differs — the menu
+/// shows the friendly family name while `--model` needs the concrete id.
+/// Mirrors LCBClaudeAdapter.m:287.
+fn cli_model_id(alias: &str) -> &str {
+    match alias {
+        "fable" => "claude-fable-5",
+        other => other,
+    }
+}
+
+/// Fold queued attachment paths into the prompt. The agent reads them with its
+/// own Read tool rather than us inlining bytes, so a 5 MB screenshot costs one
+/// tool call instead of a giant prompt. Verbatim wording from
+/// LCBClaudeAdapter.m:275-280 so both platforms behave identically.
+fn prompt_with_attachments(base: &str, attachments: &[String]) -> String {
+    if attachments.is_empty() {
+        return base.to_string();
+    }
+    let mut prompt = if base.trim().is_empty() {
+        "Please look at the attached file(s).".to_string()
+    } else {
+        base.to_string()
+    };
+    prompt.push_str("\n\n[The user attached these file(s) — use your Read tool to view them:]\n");
+    for path in attachments {
+        prompt.push_str(path);
+        prompt.push('\n');
+    }
+    prompt
+}
+
 #[tauri::command]
 pub async fn claude_send(
     app: tauri::AppHandle,
@@ -154,18 +330,20 @@ pub async fn claude_send(
     cwd: String,
     model: String,
     resume: Option<String>,
+    attachments: Option<Vec<String>>,
     on_event: Channel<Value>,
 ) -> Result<(), String> {
-    let bin = find_claude().ok_or_else(|| {
-        "Could not find the `claude` CLI. Install Claude Code and sign in with `claude login`.".to_string()
-    })?;
+    let bin = find_claude()?;
+    let message = prompt_with_attachments(&message, &attachments.unwrap_or_default());
 
     // When signed in, wire the LingCode Cloud backend into this workspace's
     // .mcp.json and hand the agent the token via the environment (kept out of
     // the on-disk config). The same account token also powers LingModel below.
     let cloud_token = crate::deploy::deploy_get_saved_token();
     if cloud_token.is_some() {
-        crate::fsops::scaffold_cloud_backend(&cwd);
+        // Idempotent refresh; the folder-open path owns the one-time note, so
+        // the "newly wired" answer is not interesting here.
+        let _ = crate::fsops::scaffold_cloud_backend(&cwd);
     }
     // Locate the bundled Quinny CLI once so we can (a) advertise it in the
     // system prompt, (b) prepend its dir to $PATH for the child, and
@@ -229,7 +407,7 @@ pub async fn claude_send(
         // routing is disabled here so lingmodel-tag falls back to letting the
         // custom endpoint pick its default.
         if model != LINGMODEL_TAG && model != "default" {
-            std_cmd.arg("--model").arg(&model);
+            std_cmd.arg("--model").arg(cli_model_id(&model));
         }
     } else if model == LINGMODEL_TAG {
         // LingModel: route the same `claude` CLI at the LingCode proxy using the
@@ -260,7 +438,7 @@ pub async fn claude_send(
             std_cmd.env("ANTHROPIC_API_KEY", k);
         }
         if model != "default" {
-            std_cmd.arg("--model").arg(&model);
+            std_cmd.arg("--model").arg(cli_model_id(&model));
         }
     }
     if let Some(sid) = resume.as_ref().filter(|s| !s.is_empty()) {

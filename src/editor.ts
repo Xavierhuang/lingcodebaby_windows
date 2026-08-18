@@ -28,6 +28,28 @@ const xcodeLight = HighlightStyle.define([
   { tag: t.tagName, color: "#aa0d91" },
 ]);
 
+// Quinny (.qn) — a task-oriented intent language: eleven reserved words,
+// indentation blocks, `#` line comments, no string literals. Port of the Mac
+// app's syntax/lang_quinny.c so .qn files highlight on both platforms.
+const QUINNY_KEYWORDS = new Set([
+  "project", "task", "component", "goal", "input", "output",
+  "constraint", "depends", "uses", "test", "success",
+]);
+
+const quinny = StreamLanguage.define<{}>({
+  name: "quinny",
+  token(stream) {
+    if (stream.eatSpace()) return null;
+    if (stream.peek() === "#") { stream.skipToEnd(); return "comment"; }
+    if (stream.match(/^[A-Za-z_][A-Za-z0-9_-]*/)) {
+      return QUINNY_KEYWORDS.has(stream.current().toLowerCase()) ? "keyword" : null;
+    }
+    stream.next();
+    return null;
+  },
+  languageData: { commentTokens: { line: "#" } },
+});
+
 const language = new Compartment();
 
 function langForPath(path: string) {
@@ -45,6 +67,7 @@ function langForPath(path: string) {
     case "c": case "h": case "cpp": case "cc": case "hpp": case "m": case "mm":
       return StreamLanguage.define(c);
     case "sh": case "bash": case "zsh": return StreamLanguage.define(shell);
+    case "qn": case "quinny": return quinny;
     default: return [];
   }
 }

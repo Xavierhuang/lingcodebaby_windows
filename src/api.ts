@@ -10,6 +10,21 @@ export interface Prefs {
 }
 export interface EndpointConfig { enabled: boolean; url: string; key_present: boolean; }
 
+/** One rendered transcript row, as persisted. `clean` mirrors the Mac
+ *  thinkingOnly flag inverted: clean rows are always shown, the rest only with
+ *  View ▸ Show Claude Thinking on. */
+export interface StoredMessage { kind: string; text: string; clean: boolean; }
+/** `<project>/.lingcode/chat-baby.json`. `session` is the opaque CLI session id
+ *  replayed via `claude --resume` so the agent keeps its own context too. */
+export interface StoredHistory {
+  session: string | null;
+  model: string | null;
+  messages: StoredMessage[];
+  /** Set by the Rust side when the rows came from the legacy shared chat.json;
+   *  the session id is deliberately dropped in that case. */
+  adopted_legacy?: boolean;
+}
+
 export const api = {
   listDir: (path: string) => invoke<DirEntry[]>("list_dir", { path }),
   readFile: (path: string) => invoke<string>("read_text_file", { path }),
@@ -26,6 +41,20 @@ export const api = {
 
   claudeAbort: () => invoke<void>("claude_abort"),
 
+  // Per-project chat transcript + attachments under <project>/.lingcode/.
+  historyLoad: (folder: string) => invoke<StoredHistory | null>("history_load", { folder }),
+  historySave: (folder: string, doc: StoredHistory) => invoke<void>("history_save", { folder, doc }),
+  historyClear: (folder: string) => invoke<void>("history_clear", { folder }),
+  attachSave: (folder: string, dataBase64: string, ext: string) =>
+    invoke<string>("attach_save", { folder, dataBase64, ext }),
+  attachRemove: (path: string) => invoke<void>("attach_remove", { path }),
+
+  // LingCode Cloud managed backend (Postgres + auth + storage + functions).
+  cloudConnectBackend: (folder: string) => invoke<void>("cloud_connect_backend", { folder }),
+  /** Folder-open auto-wiring. Resolves true only the first time a folder is
+   *  wired, so the caller posts the "connected" note once. */
+  cloudAutoconnectBackend: (folder: string) => invoke<boolean>("cloud_autoconnect_backend", { folder }),
+
   // Deploy
   deployApiBase: () => invoke<string>("deploy_api_base"),
   deploySignin: () => invoke<string>("deploy_signin"),
@@ -33,6 +62,7 @@ export const api = {
   deploySaveConfig: (folder: string, config: any) => invoke<void>("deploy_save_config", { folder, config }),
   deployGetSavedToken: () => invoke<string | null>("deploy_get_saved_token"),
   deploySaveToken: (token: string) => invoke<void>("deploy_save_token", { token }),
+  deployDeleteToken: () => invoke<void>("deploy_delete_token"),
   deploySlugify: (input: string) => invoke<string>("deploy_slugify", { input }),
   deployHasIndex: (folder: string) => invoke<boolean>("deploy_has_index", { folder }),
   deployCheck: (token: string, slug: string, exclude: string | null) =>
@@ -72,7 +102,7 @@ export type ChatEvent =
   | { kind: "done"; stderr: string };
 
 export function claudeSend(
-  args: { message: string; cwd: string; model: string; resume: string | null },
+  args: { message: string; cwd: string; model: string; resume: string | null; attachments: string[] },
   onEvent: (e: ChatEvent) => void
 ): Promise<void> {
   const channel = new Channel<ChatEvent>();
