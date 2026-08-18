@@ -17,6 +17,7 @@ struct MenuState {
     thinking: CheckMenuItem<Wry>,
     sounds: CheckMenuItem<Wry>,
     models: HashMap<String, CheckMenuItem<Wry>>,
+    appearances: HashMap<String, CheckMenuItem<Wry>>,
     window_count: AtomicUsize,
 }
 
@@ -99,6 +100,25 @@ fn build_menu(app: &tauri::AppHandle, prefs: &prefs::Prefs) -> tauri::Result<(Me
         &[&m_lingmodel, &m_default, &m_opus, &m_sonnet, &m_fable, &m_haiku],
     )?;
 
+    // Appearance submenu. The app followed the OS with no way to override it;
+    // "System" keeps that behaviour and is the default. Beyond Mac parity —
+    // the Mac app offers no appearance control at all.
+    let mk_appearance = |id: &str, label: &str| -> tauri::Result<CheckMenuItem<Wry>> {
+        CheckMenuItem::with_id(
+            app,
+            format!("appearance:{id}"),
+            label,
+            true,
+            prefs.appearance == id,
+            None::<&str>,
+        )
+    };
+    let a_system = mk_appearance("system", "System")?;
+    let a_light = mk_appearance("light", "Light")?;
+    let a_dark = mk_appearance("dark", "Dark")?;
+    let appearance_menu =
+        Submenu::with_items(app, "Appearance", true, &[&a_system, &a_light, &a_dark])?;
+
     let thinking = CheckMenuItem::with_id(app, "toggle_thinking", "Show Claude Thinking", true, false, Some("CmdOrCtrl+Shift+T"))?;
     let stop = MenuItem::with_id(app, "stop_claude", "Stop Claude", true, Some("CmdOrCtrl+."))?;
     let sounds = CheckMenuItem::with_id(app, "toggle_sounds", "Play Sounds", true, prefs.play_sounds, None::<&str>)?;
@@ -117,6 +137,7 @@ fn build_menu(app: &tauri::AppHandle, prefs: &prefs::Prefs) -> tauri::Result<(Me
             &sounds,
             &PredefinedMenuItem::separator(app)?,
             &model_menu,
+            &appearance_menu,
         ],
     )?;
 
@@ -162,9 +183,14 @@ fn build_menu(app: &tauri::AppHandle, prefs: &prefs::Prefs) -> tauri::Result<(Me
     models.insert("fable".to_string(), m_fable);
     models.insert("haiku".to_string(), m_haiku);
 
+    let mut appearances = HashMap::new();
+    appearances.insert("system".to_string(), a_system);
+    appearances.insert("light".to_string(), a_light);
+    appearances.insert("dark".to_string(), a_dark);
+
     Ok((
         menu,
-        MenuState { thinking, sounds, models, window_count: AtomicUsize::new(0) },
+        MenuState { thinking, sounds, models, appearances, window_count: AtomicUsize::new(0) },
     ))
 }
 
@@ -216,6 +242,14 @@ pub fn run() {
                     let _ = item.set_checked(key == model);
                 }
                 emit_focused(app, format!("model:{model}"));
+                return;
+            }
+
+            if let Some(mode) = id.strip_prefix("appearance:") {
+                for (key, item) in state.appearances.iter() {
+                    let _ = item.set_checked(key == mode);
+                }
+                emit_focused(app, format!("appearance:{mode}"));
                 return;
             }
 

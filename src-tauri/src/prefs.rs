@@ -1,12 +1,18 @@
-// Persistent user preferences (Claude model + sound toggle), the cross-platform
-// stand-in for NSUserDefaults. Stored as JSON in the OS app-config directory.
+// Persistent user preferences (Claude model, sound toggle, appearance), the
+// cross-platform stand-in for NSUserDefaults. Stored as JSON in the OS app-config
+// directory.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Follow the OS unless the user says otherwise.
+fn default_appearance() -> String {
+    "system".to_string()
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Prefs {
-    pub model: String,       // "lingmodel" | "default" | "opus" | "sonnet" | "haiku"
+    pub model: String,       // "lingmodel" | "default" | "opus" | "sonnet" | "fable" | "haiku"
     pub play_sounds: bool,
     /// Custom endpoint state — the API key itself is in the OS Keychain
     /// (endpoint.rs), never in this JSON. Mirrors Mac ClaudeChat.m's
@@ -20,6 +26,11 @@ pub struct Prefs {
     /// LCBOnboarding's "shown once" NSUserDefaults flag.
     #[serde(default)]
     pub onboarding_complete: bool,
+    /// "system" (follow the OS) | "light" | "dark". Windows apps are expected to
+    /// offer per-app theme control; the Mac app only follows the OS appearance,
+    /// so this is deliberately beyond parity.
+    #[serde(default = "default_appearance")]
+    pub appearance: String,
 }
 
 impl Default for Prefs {
@@ -33,6 +44,7 @@ impl Default for Prefs {
             use_custom_endpoint: false,
             custom_endpoint_url: String::new(),
             onboarding_complete: false,
+            appearance: default_appearance(),
         }
     }
 }

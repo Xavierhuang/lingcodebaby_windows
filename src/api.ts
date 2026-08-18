@@ -7,6 +7,7 @@ export interface Prefs {
   use_custom_endpoint: boolean;
   custom_endpoint_url: string;
   onboarding_complete: boolean;
+  appearance: string;
 }
 export interface EndpointConfig { enabled: boolean; url: string; key_present: boolean; }
 

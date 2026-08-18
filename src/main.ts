@@ -9,6 +9,7 @@ import { alertDialog, promptText, confirmDialog } from "./ui";
 import { showEndpointSheet } from "./endpoint";
 import { showOnboarding, showOnboardingIfNeeded } from "./onboarding";
 import { connectBackendToFolder, openBackendConsole } from "./cloud";
+import { Appearance, applyAppearance, isDark, onAppearanceChange } from "./theme";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, UserAttentionType } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -61,8 +62,21 @@ function setModel(m: string, persist = true) {
 setModel(currentModel, false); // show a default until prefs load
 
 const tree = new FileTree(treeEl);
-const editor = new CodeEditor(cmHost);
+const editor = new CodeEditor(cmHost, isDark());
 const chat = new ChatPanel(chatBody);
+
+// CodeMirror picks its palette in JS, so it can't follow the CSS token blocks —
+// push each change into it. Fires immediately with the current state, and again
+// whenever the menu or the OS flips.
+onAppearanceChange((dark) => editor.setDark(dark));
+
+// Current appearance — controlled from View → Appearance.
+let currentAppearance: Appearance = "system";
+function setAppearance(mode: Appearance, persist = true) {
+  currentAppearance = mode;
+  applyAppearance(mode);
+  if (persist) persistPrefs();
+}
 
 let currentFile: string | null = null;
 let dirty = false;
@@ -226,7 +240,12 @@ async function persistPrefs() {
   // side). Read current first, apply just the fields we own, write back.
   try {
     const current = await api.getPrefs();
-    await api.setPrefs({ ...current, model: currentModel, play_sounds: chat.playSounds });
+    await api.setPrefs({
+      ...current,
+      model: currentModel,
+      play_sounds: chat.playSounds,
+      appearance: currentAppearance,
+    });
   } catch { /* ignore */ }
 }
 
@@ -324,6 +343,10 @@ listen<string>("menu", async (ev) => {
     setModel(id.slice("model:".length));
     return;
   }
+  if (id.startsWith("appearance:")) {
+    setAppearance(id.slice("appearance:".length) as Appearance);
+    return;
+  }
   switch (id) {
     case "open_file": await doOpenFile(); break;
     case "open_folder": await doOpenFolder(); break;
@@ -356,6 +379,7 @@ listen<string>("menu", async (ev) => {
     const prefs = await api.getPrefs();
     setModel(prefs.model, false);
     chat.playSounds = prefs.play_sounds;
+    setAppearance((prefs.appearance || "system") as Appearance, false);
   } catch { /* defaults are fine */ }
   updateTitle();
 
