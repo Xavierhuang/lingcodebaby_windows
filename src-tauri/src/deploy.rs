@@ -76,6 +76,19 @@ pub fn deploy_save_token(token: String) -> Result<(), String> {
     entry.set_password(&token).map_err(|e| e.to_string())
 }
 
+/// Sign out of the LingCode account: drop the stored token. Mirrors Mac
+/// AppDelegate.signOut: / ClaudeChat.signOutLingCode. A missing entry is not an
+/// error — signing out twice should be a no-op, not a dialog.
+#[tauri::command]
+pub fn deploy_delete_token() -> Result<(), String> {
+    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT).map_err(|e| e.to_string())?;
+    match entry.delete_credential() {
+        Ok(()) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// Append a diagnostic line to %TEMP%/lingcodebaby-signin.log (best-effort).
 fn signin_log(msg: &str) {
     use std::io::Write;
@@ -348,19 +361,29 @@ fn enc(s: &str) -> String {
 
 /// Package + upload (POST for new, PUT for redeploy) + poll the job.
 /// Returns { url, workerId }.
-#[tauri::command]
-pub async fn deploy_upload(
-    folder: String,
-    token: String,
-    slug: Option<String>,
-    title: String,
-    worker_id: Option<String>,
-    on_event: Channel<Value>,
+///
+/// Shared by the Tauri command below and the headless `--deploy` CLI, so the
+/// GUI button and a scripted/CI deploy produce a byte-identical bundle through
+/// one code path. Status lines go to `emit` — a Channel message in the app, a
+/// printed line on the CLI.
+pub async fn run_deploy(
+    folder: &str,
+    token: &str,
+    slug: Option<&str>,
+    title: &str,
+    worker_id: Option<&str>,
+    emit: &(dyn Fn(&str) + Sync),
 ) -> Result<Value, String> {
-    let _ = on_event.send(json!({ "kind": "status", "text": "Packaging files…" }));
+    let slug = slug.map(|s| s.to_string());
+    let worker_id = worker_id.map(|s| s.to_string());
+    let folder = folder.to_string();
+    let token = token.to_string();
+    let title = title.to_string();
+
+    emit("Packaging files…");
     let bundle = build_bundle(&folder)?;
 
-    let _ = on_event.send(json!({ "kind": "status", "text": "Uploading to LingCode Cloud…" }));
+    emit("Uploading to LingCode Cloud…");
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(600))
         .build()
@@ -426,7 +449,7 @@ pub async fn deploy_upload(
             return Err("Deploy timed out. It may still finish — check your LingCode account.".into());
         }
         tokio::time::sleep(std::time::Duration::from_secs(4)).await;
-        let _ = on_event.send(json!({ "kind": "status", "text": "Building on the server…" }));
+        emit("Building on the server…");
         let jr = client
             .get(format!("{}/api/account/cloud-workers/jobs/{}", base, job_id))
             .bearer_auth(&token)
@@ -452,6 +475,111 @@ pub async fn deploy_upload(
                 return Err(msg.to_string());
             }
             _ => continue,
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn deploy_upload(
+    folder: String,
+    token: String,
+    slug: Option<String>,
+    title: String,
+    worker_id: Option<String>,
+    on_event: Channel<Value>,
+) -> Result<Value, String> {
+    run_deploy(
+        &folder,
+        &token,
+        slug.as_deref(),
+        &title,
+        worker_id.as_deref(),
+        &move |text| {
+            let _ = on_event.send(json!({ "kind": "status", "text": text }));
+        },
+    )
+    .await
+}
+
+/// Headless deploy: `lingcodebaby --deploy <folder> [--slug s] [--title t] [--worker-id id]`.
+///
+/// Exists because app hosting had no non-GUI path at all — no MCP tool, no CLI —
+/// so an agent or a CI job could do everything up to the deploy and then stall on
+/// a button click. It reuses `run_deploy`, so the bundle is identical to the one
+/// the Deploy button produces; there is no second implementation to drift.
+///
+/// Returns None when `--deploy` isn't present (normal GUI launch), else the
+/// process exit code.
+pub fn run_cli() -> Option<i32> {
+    let args: Vec<String> = std::env::args().collect();
+    let pos = args.iter().position(|a| a == "--deploy")?;
+    let value_after = |flag: &str| -> Option<String> {
+        args.iter()
+            .position(|a| a == flag)
+            .and_then(|i| args.get(i + 1))
+            .filter(|v| !v.starts_with("--"))
+            .cloned()
+    };
+    let folder = match args.get(pos + 1).filter(|v| !v.starts_with("--")) {
+        Some(f) => f.clone(),
+        None => {
+            eprintln!("--deploy needs a folder path");
+            return Some(2);
+        }
+    };
+    if !std::path::Path::new(&folder).is_dir() {
+        eprintln!("Not a folder: {folder}");
+        return Some(2);
+    }
+    if !deploy_has_index(folder.clone()) {
+        eprintln!("No index.html in {folder} — point --deploy at the built site (e.g. dist/).");
+        return Some(2);
+    }
+    let token = match deploy_get_saved_token() {
+        Some(t) => t,
+        None => {
+            eprintln!(
+                "Not signed in to LingCode Cloud. Sign in from the app, or set LINGCODE_ACCESS_TOKEN."
+            );
+            return Some(1);
+        }
+    };
+    let title = value_after("--title").unwrap_or_else(|| {
+        std::path::Path::new(&folder)
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "app".into())
+    });
+    let slug = value_after("--slug");
+    let worker_id = value_after("--worker-id");
+
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Couldn't start the async runtime: {e}");
+            return Some(1);
+        }
+    };
+    let result = rt.block_on(run_deploy(
+        &folder,
+        &token,
+        slug.as_deref(),
+        &title,
+        worker_id.as_deref(),
+        &|text| eprintln!("… {text}"),
+    ));
+    match result {
+        Ok(v) => {
+            // URL on stdout alone, so a CI step can capture it with `$(...)`.
+            println!("{}", v.get("url").and_then(|u| u.as_str()).unwrap_or(""));
+            if let Some(id) = v.get("workerId").and_then(|i| i.as_str()) {
+                eprintln!("… worker id: {id} (pass --worker-id {id} to redeploy in place)");
+            }
+            Some(0)
+        }
+        Err(e) => {
+            eprintln!("Deploy failed: {e}");
+            Some(1)
         }
     }
 }

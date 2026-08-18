@@ -82,8 +82,48 @@ automatic hand-off can't complete.
 
 ## Notes on parity
 
+Tracked against `lingcodebaby_mac` (Cocoa/Objective-C).
+
+### At parity
+
+Chat with per-project history (`<project>/.lingcode/chat-baby.json`, restored on
+folder-open and resumed with `claude --resume`), New Conversation, queued prompts,
+pasted/dropped image attachments, thinking toggle, Stop, sounds, the ask_user
+choice chips, model picker (LingModel / Default / Opus / Sonnet / Fable / Haiku),
+custom endpoint, personal Anthropic key, LingCode sign-in + Sign Out, onboarding
+gate, deploy, Quinny (including `.qn` highlighting and the file-tree actions),
+the LingCode Cloud menu (Connect Backend / Open Backend Console), find bar, help
+window, and the auto-updater.
+
+### Deliberately different
+
 - The original's portable C syntax engine (`src/syntax/*.c`) is **not** linked;
   CodeMirror provides highlighting. The C engine remains reusable via Rust FFI if
   exact parity is ever needed.
 - Token storage on Windows/Linux uses the local credential store, so it is not
   shared with the macOS LingCode app's Keychain entry (that sharing was macOS-only).
+- Sign-in uses a one-shot `localhost` listener rather than the Mac's
+  `lingcodebaby://` URL scheme; same flow, no scheme registration needed.
+- A question arriving while the window is in the background flashes the taskbar
+  button instead of badging the dock.
+- The chat transcript is a flat list, not the Mac's stacked "bubble" view
+  (`LCBBubbleTranscript` + `LCBTheme`). Cosmetic only.
+
+### Not implemented (platform or scope)
+
+- **Voice mode** (`LCBVoiceCoordinator`/`Recognizer`/`Speaker`/`WakePhraseDetector`).
+  Speech-to-text is the blocker: `SFSpeechRecognizer` has no WebView2 equivalent
+  (Chromium's `SpeechRecognition` is not shipped in WebView2). Would need
+  `Windows.Media.SpeechRecognition` via a WinRT binding, or a cloud STT service.
+  Text-to-speech alone is available (`speechSynthesis`) if half the feature is useful.
+- **Codex provider** (`LCBCodexAdapter` + `LCBCodexProtocol` + `LCBCodexTransport`,
+  ~1700 lines). The `codex` CLI does run on Windows, so this is portable — it is a
+  standalone project (JSON-RPC app-server transport, approval plumbing, a provider
+  switch in the UI), not a gap that fits alongside the rest.
+- **`.docx` / `.pdf` support** — opening one as extracted text, dropping one into
+  chat, and "Save into original .docx". The Mac path is `/usr/bin/textutil` and
+  PDFKit; neither exists on Windows. Doable with a Rust `zip` + XML strip for
+  `.docx` (round-trip included) and a PDF text-extraction crate. Dropping one into
+  chat currently shows a note explaining the limitation instead of failing silently.
+- macOS-only guards with no counterpart: App Translocation detection, Keychain
+  revalidation on app-activate.

@@ -5,12 +5,15 @@ import { CodeEditor } from "./editor";
 import { ChatPanel } from "./chat";
 import { runDeploy } from "./deploy";
 import { checkForUpdates } from "./updater";
-import { alertDialog, promptText } from "./ui";
+import { alertDialog, promptText, confirmDialog } from "./ui";
 import { showEndpointSheet } from "./endpoint";
 import { showOnboarding, showOnboardingIfNeeded } from "./onboarding";
+import { connectBackendToFolder, openBackendConsole } from "./cloud";
+import { Appearance, applyAppearance, isDark, onAppearanceChange } from "./theme";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow, UserAttentionType } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 const app = document.getElementById("app")!;
 app.innerHTML = `
@@ -48,7 +51,8 @@ const modelLabel = app.querySelector(".model-label") as HTMLElement;
 // Current Claude model — controlled from the View → Claude Model menu.
 let currentModel = "lingmodel";
 const MODEL_NAMES: Record<string, string> = {
-  lingmodel: "LingModel", default: "Default", opus: "Opus", sonnet: "Sonnet", haiku: "Haiku",
+  lingmodel: "LingModel", default: "Default", opus: "Opus", sonnet: "Sonnet",
+  fable: "Fable", haiku: "Haiku",
 };
 function setModel(m: string, persist = true) {
   currentModel = m;
@@ -58,8 +62,21 @@ function setModel(m: string, persist = true) {
 setModel(currentModel, false); // show a default until prefs load
 
 const tree = new FileTree(treeEl);
-const editor = new CodeEditor(cmHost);
+const editor = new CodeEditor(cmHost, isDark());
 const chat = new ChatPanel(chatBody);
+
+// CodeMirror picks its palette in JS, so it can't follow the CSS token blocks —
+// push each change into it. Fires immediately with the current state, and again
+// whenever the menu or the OS flips.
+onAppearanceChange((dark) => editor.setDark(dark));
+
+// Current appearance — controlled from View → Appearance.
+let currentAppearance: Appearance = "system";
+function setAppearance(mode: Appearance, persist = true) {
+  currentAppearance = mode;
+  applyAppearance(mode);
+  if (persist) persistPrefs();
+}
 
 let currentFile: string | null = null;
 let dirty = false;
@@ -74,6 +91,20 @@ chat.getModel = () => currentModel;
 chat.onFilesModified = async () => {
   await tree.refreshAll();
   if (currentFile) await reloadCurrentFromDisk();
+};
+// The agent wrote a file — surface it in the editor, like the Mac
+// ClaudeChatDelegate claudeChat:didWriteFileAtPath: hook does.
+chat.onFileWritten = async (path) => {
+  if (path && path !== currentFile) await openFile(path);
+};
+// Claude asked something while the window may be in the background — flash the
+// taskbar button. The Mac app badges the dock and clears it on reactivate; the
+// Windows equivalent stops flashing as soon as the window is focused.
+chat.onAskUser = async () => {
+  try {
+    const win = getCurrentWindow();
+    if (!(await win.isFocused())) await win.requestUserAttention(UserAttentionType.Informational);
+  } catch { /* not fatal — the chime already fired */ }
 };
 
 tree.onOpenFile = (path) => openFile(path);
@@ -139,6 +170,20 @@ async function loadFolder(path: string) {
   await tree.setRoot(path);
   deployBtn.disabled = false;
   updateTitle();
+  // Restore this folder's saved conversation (transcript + CLI session), or
+  // show the folder greeting when there's nothing saved.
+  await chat.setRoot(path);
+  // Wire the LingCode Cloud backend for signed-in users and say so once — the
+  // feature is otherwise silent, and "connected" is easy to mistake for
+  // "provisioned". Mirrors the Mac note in scaffoldCloudBackend:.
+  try {
+    if (await api.cloudAutoconnectBackend(path)) {
+      chat.postNote(
+        "☁️ LingCode Cloud backend connected for this folder — ask the agent to " +
+        "add a database, user accounts, or file storage and it will provision one automatically.",
+      );
+    }
+  } catch { /* non-fatal */ }
   // Scaffold screenshot/visual-regression support (no-op unless the bridge is installed).
   try {
     const note = await api.scaffoldAgentFiles(path);
@@ -195,7 +240,12 @@ async function persistPrefs() {
   // side). Read current first, apply just the fields we own, write back.
   try {
     const current = await api.getPrefs();
-    await api.setPrefs({ ...current, model: currentModel, play_sounds: chat.playSounds });
+    await api.setPrefs({
+      ...current,
+      model: currentModel,
+      play_sounds: chat.playSounds,
+      appearance: currentAppearance,
+    });
   } catch { /* ignore */ }
 }
 
@@ -220,6 +270,43 @@ async function doConfigureAnthropicKey() {
     // Empty input + no explicit 'delete' = no change (matches the prompt).
   } catch (e) {
     await alertDialog("Could not save the key: " + String(e));
+  }
+}
+
+// View ▸ New Conversation — clear the chat + saved history for this folder
+// (with a confirm, since it can't be undone). Mirrors Mac newConversation:.
+async function doNewConversation() {
+  const ok = await confirmDialog(
+    "Start a new conversation?\n\n" +
+    "This clears the current chat and its saved history for this folder, and " +
+    "Claude forgets the prior context. It can't be undone.",
+    "Clear",
+  );
+  if (ok) await chat.clearConversation();
+}
+
+// Sign out of the LingCode account (LingModel + Cloud deploy share the token).
+// If that leaves nothing configured, re-show the onboarding gate so the app
+// isn't usable signed out. Mirrors Mac AppDelegate.signOut:.
+async function doSignOut() {
+  const ok = await confirmDialog(
+    "Sign out of LingCode?\n\n" +
+    "This signs out of your LingCode account (LingModel). If you also use a " +
+    "Claude subscription, sign out of that with `claude logout` in your terminal.",
+    "Sign Out",
+  );
+  if (!ok) return;
+  try {
+    await api.deployDeleteToken();
+  } catch (e) {
+    await alertDialog("Couldn't sign out: " + String(e));
+    return;
+  }
+  const [key, ep] = await Promise.all([api.anthropicKeyPresent(), api.endpointGetConfig()]);
+  if (!key && !(ep.enabled && ep.key_present)) {
+    await showOnboarding(true);   // hard gate — nothing is configured any more
+  } else {
+    await alertDialog("Signed out of LingCode.");
   }
 }
 
@@ -256,6 +343,10 @@ listen<string>("menu", async (ev) => {
     setModel(id.slice("model:".length));
     return;
   }
+  if (id.startsWith("appearance:")) {
+    setAppearance(id.slice("appearance:".length) as Appearance);
+    return;
+  }
   switch (id) {
     case "open_file": await doOpenFile(); break;
     case "open_folder": await doOpenFolder(); break;
@@ -270,6 +361,11 @@ listen<string>("menu", async (ev) => {
     case "find_prev": editor.findPrev(); break;
     case "check_updates": await checkForUpdates(false); break;
     case "stop_claude": chat.abort(); break;
+    case "new_conversation": await doNewConversation(); break;
+    case "sign_out": await doSignOut(); break;
+    case "connect_backend": await connectBackendToFolder(folder); break;
+    case "backend_console": await openBackendConsole(); break;
+    case "visit_website": await openUrl("https://lingcode.dev").catch(() => {}); break;
     case "thinking:on": chat.setShowThinking(true); break;
     case "thinking:off": chat.setShowThinking(false); break;
     case "sounds:on": chat.playSounds = true; persistPrefs(); break;
@@ -283,6 +379,7 @@ listen<string>("menu", async (ev) => {
     const prefs = await api.getPrefs();
     setModel(prefs.model, false);
     chat.playSounds = prefs.play_sounds;
+    setAppearance((prefs.appearance || "system") as Appearance, false);
   } catch { /* defaults are fine */ }
   updateTitle();
 

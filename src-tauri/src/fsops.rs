@@ -10,19 +10,107 @@ use std::path::{Path, PathBuf};
 
 // --- LingCode Cloud backend wiring -----------------------------------------
 
+/// Lexical path standardization — the port of `-[NSString
+/// stringByStandardizingPath]` that the Mac key (EditorWindowController
+/// cloudProjectKeyForRoot:) runs before hashing: collapse `.` and `..`, squeeze
+/// repeated separators, drop a trailing separator.
+///
+/// Deliberately lexical. `std::fs::canonicalize` would resolve symlinks and add
+/// a `\\?\` prefix on Windows; Mac's standardization leaves symlinks intact
+/// (`/tmp` stays `/tmp`, not `/private/tmp`), so resolving here would put the two
+/// platforms further apart, not closer.
+///
+/// The Windows-only extra: the SAME folder reaches us spelled two ways — the
+/// Open Folder… dialog yields `D:\a\b`, while paths we build ourselves (New
+/// Quinny Project…) and anything echoed back from `list_dir` use `D:/a/b`. macOS
+/// has no such split. We fold to the native backslash form because that is what
+/// the dialog — and therefore every key already written to a `.mcp.json` —
+/// produces, so existing backends keep resolving.
+fn standardize_path(input: &str) -> String {
+    #[cfg(windows)]
+    let (sep, raw) = ('\\', input.replace('/', "\\"));
+    #[cfg(not(windows))]
+    let (sep, raw) = ('/', input.to_string());
+
+    let is_sep = |c: char| c == '/' || c == '\\';
+    // Keep any leading separator run (POSIX root, or a UNC `\\server\share`).
+    let lead: String = raw.chars().take_while(|c| is_sep(*c)).map(|_| sep).collect();
+    let mut parts: Vec<&str> = Vec::new();
+    for seg in raw.split(is_sep) {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                // Only pop a real segment; `..` above the root has nowhere to go,
+                // and popping a drive letter would change which volume we mean.
+                match parts.last() {
+                    Some(last) if *last != ".." && !last.ends_with(':') => { parts.pop(); }
+                    _ => parts.push(".."),
+                }
+            }
+            other => parts.push(other),
+        }
+    }
+    let joined = parts.join(&sep.to_string());
+    if joined.is_empty() { lead.clone() } else { format!("{lead}{joined}") }
+}
+
 /// Stable per-workspace project key, IDENTICAL to the Mac app + full app
 /// (LingCodeCloudMCPSetup.projectKey) so the same folder resolves the same
 /// managed backend everywhere: "proj_" + first 20 chars of lowercase-hex
-/// SHA256(standardized path). We deliberately do NOT `canonicalize` (which
-/// resolves symlinks): NSURL.standardizedFileURL / stringByStandardizingPath on
-/// the Mac side leave symlinks intact (e.g. /tmp stays /tmp, not /private/tmp),
-/// so matching that means only trimming a trailing separator.
+/// SHA256(standardized path).
+///
+/// Stability is load-bearing, not cosmetic: the server stores a backend as
+/// `(user_id, project_key)` and looks it up with `getAccountBackend(db, userId,
+/// projectKey)` (cloud-backend.js). A key that changes spelling doesn't fail
+/// loudly — it misses the lookup, so the agent provisions a SECOND empty backend
+/// and the populated one becomes unreachable for that folder.
 pub fn cloud_project_key(cwd: &str) -> String {
-    let path = cwd.trim_end_matches(|c| c == '/' || c == '\\');
+    let path = standardize_path(cwd);
     let mut hasher = Sha256::new();
     hasher.update(path.as_bytes());
     let hex: String = hasher.finalize().iter().map(|b| format!("{:02x}", b)).collect();
     format!("proj_{}", &hex[..20])
+}
+
+#[cfg(test)]
+mod project_key_tests {
+    use super::cloud_project_key;
+
+    /// Every spelling of one folder must hash to one key. Before this, the
+    /// dialog form and the built form disagreed and the `x-lingcode-project`
+    /// header flip-flopped between two backends.
+    #[test]
+    fn spellings_of_the_same_folder_agree() {
+        let canonical = cloud_project_key(r"D:\Desktop\projects\antisocial");
+        for spelling in [
+            r"D:/Desktop/projects/antisocial",
+            r"D:\Desktop\projects\antisocial\",
+            r"D:\Desktop\projects\.\antisocial",
+            r"D:\Desktop\projects\clientProject\..\antisocial",
+            r"D:\Desktop\\projects\antisocial",
+        ] {
+            assert_eq!(cloud_project_key(spelling), canonical, "{spelling}");
+        }
+    }
+
+    /// …and genuinely different folders must still differ.
+    #[test]
+    fn different_folders_differ() {
+        assert_ne!(
+            cloud_project_key(r"D:\projects\a"),
+            cloud_project_key(r"D:\projects\b"),
+        );
+    }
+
+    /// The key already written to disk before the fix must keep resolving, or
+    /// existing backends would be orphaned by the upgrade.
+    #[test]
+    fn preserves_the_key_already_on_disk() {
+        assert_eq!(
+            cloud_project_key(r"D:\Desktop\projects\clientProject\antisocial"),
+            "proj_463c7e579c533f7884d3",
+        );
+    }
 }
 
 /// Wire the LingCode Cloud managed backend into `<cwd>/.mcp.json` so the
@@ -34,7 +122,11 @@ pub fn cloud_project_key(cwd: &str) -> String {
 /// CLI expands from the environment the agent is spawned with. Additive +
 /// idempotent: merges into any existing `.mcp.json` without clobbering other
 /// servers.
-pub fn scaffold_cloud_backend(cwd: &str) {
+///
+/// Returns true when the entry was NEWLY added, so the caller can post the
+/// one-time "backend connected" note. Reopening an already-wired folder returns
+/// false and stays quiet — same rule as the Mac `wasWired` flag.
+pub fn scaffold_cloud_backend(cwd: &str) -> bool {
     let mcp_url = format!("{}/api/cloud/account/mcp", crate::deploy::deploy_api_base());
     let entry = json!({
         "type": "http",
@@ -54,17 +146,102 @@ pub fn scaffold_cloud_backend(cwd: &str) {
     // Safe: root is guaranteed an object here.
     let obj = match root.as_object_mut() {
         Some(o) => o,
-        None => return,
+        None => return false,
     };
     let servers = obj.entry("mcpServers").or_insert_with(|| json!({}));
-    if let Some(map) = servers.as_object_mut() {
-        map.insert("lingcode-cloud".to_string(), entry);
-    } else {
-        return; // pre-existing mcpServers is malformed; leave it alone
+    // Refresh the entry every time: the project key is folder-derived so it's
+    // stable, but rewriting keeps it correct if the file was hand-edited.
+    let newly_wired = match servers.as_object_mut() {
+        Some(map) => map.insert("lingcode-cloud".to_string(), entry).is_none(),
+        None => return false, // pre-existing mcpServers is malformed; leave it alone
+    };
+    match serde_json::to_vec_pretty(&root) {
+        Ok(bytes) => std::fs::write(&path, bytes).is_ok() && newly_wired,
+        Err(_) => false,
     }
-    if let Ok(bytes) = serde_json::to_vec_pretty(&root) {
-        let _ = std::fs::write(&path, bytes);
+}
+
+/// Folder-open hook: wire the backend for a signed-in user and report whether
+/// this was the first time, so the chat can post the one-time note. Silent no-op
+/// when signed out. Mirrors the Mac scaffoldCloudBackend: call in openFolderURL:.
+#[tauri::command]
+pub fn cloud_autoconnect_backend(folder: String) -> bool {
+    if crate::deploy::deploy_get_saved_token().is_none() {
+        return false; // signed out → nothing to wire
     }
+    if folder.trim().is_empty() || !Path::new(&folder).is_dir() {
+        return false;
+    }
+    scaffold_cloud_backend(&folder)
+}
+
+/// Best-effort eager provision, so the backend exists — and shows in the web
+/// console — the moment a project connects, rather than only on first agent use.
+/// Port of LingCodeCloudMCPSetup.provisionEagerly (the full LingCode IDE).
+///
+/// Writing `.mcp.json` alone grants ACCESS but creates nothing; the console then
+/// reads "No backends yet", which is indistinguishable from a broken connect.
+/// The call is idempotent server-side (`provisionBackend` returns the existing
+/// row when one is already live), so reconnecting never double-creates.
+///
+/// The label is the folder name, so the console isn't a wall of opaque hashes.
+/// We do NOT send `project_id`: that comes from the IDE's ProjectManifestStore,
+/// which Baby has no equivalent of — the server falls back to project_key, which
+/// is exactly the pre-existing behaviour for a solo project.
+async fn provision_backend_eagerly(folder: &str, token: &str) -> Result<(), String> {
+    let url = format!(
+        "{}/api/cloud/account/backends/provision",
+        crate::deploy::deploy_api_base()
+    );
+    let label = Path::new(folder)
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let body = json!({ "project_key": cloud_project_key(folder), "label": label });
+
+    let resp = reqwest::Client::new()
+        .post(&url)
+        .bearer_auth(token)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach LingCode Cloud: {e}"))?;
+
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        // Surface the server's own error code — `cloud_not_configured`,
+        // `unauthorized`, `too_many_inflight` each need a different user action.
+        let code = serde_json::from_str::<Value>(&text)
+            .ok()
+            .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from))
+            .unwrap_or_else(|| text.chars().take(200).collect());
+        return Err(format!("provision-failed: {} ({code})", status.as_u16()));
+    }
+    Ok(())
+}
+
+/// Explicit, discoverable counterpart to the silent auto-wiring that runs on
+/// every `claude_send` when signed in: writes the `lingcode-cloud` MCP entry AND
+/// eagerly creates the backend, so it appears in the console immediately.
+///
+/// Mirrors EditorWindowController.connectBackendToFolder: for the wiring, plus
+/// LingCodeCloudMCPSetup's eager provision for the creation — Baby has no
+/// "attach to an existing shared backend" mode, so unlike the IDE there is no
+/// case where the eager call would relabel someone else's backend.
+///
+/// The failure strings are matched by the frontend; keep them in sync with cloud.ts.
+#[tauri::command]
+pub async fn cloud_connect_backend(folder: String) -> Result<(), String> {
+    let token = match crate::deploy::deploy_get_saved_token() {
+        Some(t) => t,
+        None => return Err("not-signed-in".into()),
+    };
+    if folder.trim().is_empty() || !Path::new(&folder).is_dir() {
+        return Err("no-folder".into());
+    }
+    scaffold_cloud_backend(&folder);
+    provision_backend_eagerly(&folder, &token).await
 }
 
 #[derive(Serialize)]
