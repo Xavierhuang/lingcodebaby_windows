@@ -5,9 +5,10 @@ import { CodeEditor } from "./editor";
 import { ChatPanel } from "./chat";
 import { runDeploy } from "./deploy";
 import { checkForUpdates } from "./updater";
-import { alertDialog, promptText } from "./ui";
+import { alertDialog, promptText, choiceDialog } from "./ui";
 import { showEndpointSheet } from "./endpoint";
-import { showOnboarding, showOnboardingIfNeeded } from "./onboarding";
+import { showOnboarding, showOnboardingIfNeeded, runClaudeInstall } from "./onboarding";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -277,6 +278,37 @@ listen<string>("menu", async (ev) => {
   }
 });
 
+// ---- Claude Code CLI presence ----
+
+let claudeInstallPromptShown = false;
+
+/** One-shot per launch: if the `claude` CLI is missing, offer to install it.
+ *  The dialog is the consent step — picking an installer runs it. */
+async function maybeOfferClaudeInstall(): Promise<void> {
+  if (claudeInstallPromptShown) return;
+  if (await api.claudeAvailable()) return;
+  claudeInstallPromptShown = true;
+
+  const choice = await choiceDialog(
+    "LingCodeBaby's AI runs on the Claude Code command-line tool, which isn't " +
+      "installed on this machine yet. Pick an installer and a terminal will open " +
+      "and run it — restart LingCodeBaby when it finishes.",
+    ["Run Installer", "Install via npm", "Learn More", "Later"],
+  );
+  if (choice === 2) {
+    await openUrl("https://docs.claude.com/en/docs/claude-code/setup");
+    return;
+  }
+  if (choice !== 0 && choice !== 1) return;
+
+  const { running, command } = await runClaudeInstall(choice === 0 ? "native" : "npm");
+  await alertDialog(
+    running
+      ? "A terminal is running the installer — restart LingCodeBaby when it finishes."
+      : `Couldn't open a terminal. The command is on your clipboard — run it yourself:\n\n${command}`,
+  );
+}
+
 // ---- init prefs ----
 (async () => {
   try {
@@ -290,6 +322,12 @@ listen<string>("menu", async (ev) => {
   // Mirrors Mac LCBOnboarding showGate: (blocks the app on cold launch until
   // an auth path is chosen; no-op once the user completes it once).
   try { await showOnboardingIfNeeded(); } catch { /* non-fatal */ }
+
+  // Every turn shells out to the `claude` CLI, so without it the chat input is
+  // dead. Offer to install it rather than letting the user discover that the
+  // hard way. Mirrors Mac EditorWindowController maybeShowClaudeOnboarding —
+  // shown at most once per launch, and never when the CLI is already there.
+  try { await maybeOfferClaudeInstall(); } catch { /* non-fatal */ }
 
   // Quietly check for updates a few seconds after launch.
   setTimeout(() => checkForUpdates(true), 4000);

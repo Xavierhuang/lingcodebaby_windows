@@ -1,6 +1,7 @@
 mod anthropic_key;
 mod approval;
 mod chat;
+mod claude_install;
 mod deploy;
 mod endpoint;
 mod fsops;
@@ -296,6 +297,9 @@ pub fn run() {
             prefs::set_prefs,
             chat::claude_send,
             chat::claude_abort,
+            claude_install::claude_available,
+            claude_install::claude_install,
+            claude_install::claude_install_command,
             voice::voice_status,
             voice::voice_shape,
             voice::voice_transcribe,

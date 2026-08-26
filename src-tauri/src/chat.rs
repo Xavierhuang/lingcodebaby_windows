@@ -47,7 +47,9 @@ const CLOUD_BACKEND_HINT: &str = "\n\nA LingCode Cloud managed backend (Postgres
 const QUINNY_HINT: &str = "\n\nQuinny — an executable specification language, BUNDLED with this app and always on your PATH (also $QUINNY_BIN); just run `quinny …` via bash, no install needed. It VERIFIES code against acceptance criteria — it does NOT write the code for you (you write the code; you're better at it than a decomposing pipeline). Reach for it when a task has real correctness-critical LOGIC: pricing, cart/checkout math, business rules, state machines, validation, auth, parsing, calculations — the parts where a silent bug is expensive. Do NOT use it for UI/layout/styling, static pages, simple scripts, or one-off edits — it can't gate those and adds no value.\nWhen it fits:\n1. `quinny scaffold \"<what to build>\" -o <dir>` — drafts a `.qn` contract scoped to the verifiable logic, plus a module stub. (The user can describe it in plain English; scaffold writes the acceptance criteria for them.)\n2. Implement the module — write the real code.\n3. `quinny verify <contract>.qn <dir>` — runs the criteria against your code and reports per-criterion PASS/FAIL. Keep fixing until all gating (test) criteria pass.\n4. To lock it in, `quinny verify … --emit <name>_contract_test.py` and commit the .qn + suite so it re-runs deterministically in CI with no model.\nQuick reference: `quinny --help`. Rationale: agents write plausible code that 'looks done' but misses edge cases; verify makes 'is it correct?' an objective command, and the contract keeps catching regressions after you move on. (`quinny build`/`gen` code generation is experimental — prefer writing the code yourself.)";
 
 /// Locate a `claude` executable, preferring a real binary over a shell shim.
-fn find_claude() -> Option<PathBuf> {
+/// Shared with `claude_install::claude_available` — the onboarding gate must
+/// probe exactly the paths a real turn will use, or it lies to the user.
+pub(crate) fn find_claude() -> Option<PathBuf> {
     let home = dirs::home_dir();
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Some(h) = &home {

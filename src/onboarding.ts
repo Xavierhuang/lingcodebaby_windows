@@ -10,9 +10,25 @@
 // The gate marks `onboarding_complete=true` in prefs.json on any path chosen,
 // so it never re-appears unless the user picks Help → Welcome… explicitly.
 
-import { api } from "./api";
+import { api, type ClaudeInstallMethod } from "./api";
 import { showEndpointSheet } from "./endpoint";
 import { tokenPrompt, alertDialog, promptText } from "./ui";
+
+/** Run the Claude Code installer in a terminal. When no terminal could be
+ *  launched, fall back to the Mac behaviour: put the command on the clipboard
+ *  so the user can paste it themselves. Returns what to tell them. */
+export async function runClaudeInstall(
+  method: ClaudeInstallMethod,
+): Promise<{ running: boolean; command: string }> {
+  const [running, command] = await Promise.all([
+    api.claudeInstall(method),
+    api.claudeInstallCommand(method),
+  ]);
+  if (!running) {
+    try { await navigator.clipboard.writeText(command); } catch { /* best effort */ }
+  }
+  return { running, command };
+}
 
 /** Returns true iff SOMEthing is configured that lets the app talk to a model. */
 async function isAuthenticated(): Promise<boolean> {
@@ -45,6 +61,19 @@ export async function showOnboarding(hardGate: boolean): Promise<void> {
           A tiny cross-platform editor with Claude, cloud deploy, and Quinny
           built in. Pick how you want to talk to Claude — you can change any
           time from the View menu.
+        </div>
+
+        <div class="onboarding-cli-row" hidden>
+          <div class="onboarding-cli-text">
+            <div class="onboarding-cli-title">Claude Code CLI</div>
+            <div class="onboarding-cli-body">
+              The engine LingCodeBaby runs on — not installed on this machine yet.
+            </div>
+          </div>
+          <div class="onboarding-cli-actions">
+            <button class="onboarding-cli-btn primary" data-method="native">Install</button>
+            <button class="onboarding-cli-btn" data-method="npm">via npm</button>
+          </div>
         </div>
 
         <div class="onboarding-cards">
@@ -89,6 +118,37 @@ export async function showOnboarding(hardGate: boolean): Promise<void> {
 
     const errEl = overlay.querySelector<HTMLElement>(".onboarding-error")!;
     const skip  = overlay.querySelector<HTMLButtonElement>(".onboarding-skip")!;
+
+    // Engine row — only shown when the CLI is actually missing. It deliberately
+    // does NOT gate finish(): the auth cards still decide when the gate closes,
+    // so a user who installs the CLI out-of-band is never trapped here.
+    const cliRow = overlay.querySelector<HTMLElement>(".onboarding-cli-row")!;
+    api.claudeAvailable().then((present) => { cliRow.hidden = present; }).catch(() => {});
+    cliRow.querySelectorAll<HTMLButtonElement>(".onboarding-cli-btn").forEach((btn) => {
+      btn.onclick = async () => {
+        const method = btn.dataset.method as ClaudeInstallMethod;
+        const actions = cliRow.querySelector<HTMLElement>(".onboarding-cli-actions")!;
+        actions.textContent = "Starting…";
+        try {
+          const { running, command } = await runClaudeInstall(method);
+          const body = cliRow.querySelector<HTMLElement>(".onboarding-cli-body")!;
+          if (running) {
+            actions.textContent = "";
+            body.textContent =
+              "Terminal is running the installer — restart LingCodeBaby when it finishes.";
+          } else {
+            actions.textContent = "";
+            body.innerHTML =
+              "Couldn't open a terminal. The command is on your clipboard — run it yourself:<br>" +
+              `<code></code>`;
+            body.querySelector("code")!.textContent = command;
+          }
+        } catch (e) {
+          errEl.textContent = String(e);
+          actions.textContent = "";
+        }
+      };
+    });
 
     const finish = async () => {
       await markComplete();

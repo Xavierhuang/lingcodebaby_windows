@@ -10,6 +10,10 @@ export interface Prefs {
 }
 export interface EndpointConfig { enabled: boolean; url: string; key_present: boolean; }
 
+/** How to install the Claude Code CLI: Anthropic's own installer (no Node
+ *  needed) or the global npm package, for machines that already have Node. */
+export type ClaudeInstallMethod = "native" | "npm";
+
 /** Whether hands-free voice mode can run right now. Never carries vendor detail. */
 export interface VoiceStatus {
   signed_in: boolean;
@@ -35,6 +39,15 @@ export const api = {
   setPrefs: (prefs: Prefs) => invoke<void>("set_prefs", { prefs }),
 
   claudeAbort: () => invoke<void>("claude_abort"),
+
+  // Claude Code CLI — the engine every turn shells out to. Onboarding offers to
+  // install it when it's missing (Mac mirror: +[ClaudeChat beginClaudeInstall]).
+  claudeAvailable: () => invoke<boolean>("claude_available"),
+  /** Opens a terminal running the installer. False = no terminal could be
+   *  launched, so show the command for manual copying instead. */
+  claudeInstall: (method: ClaudeInstallMethod) => invoke<boolean>("claude_install", { method }),
+  claudeInstallCommand: (method: ClaudeInstallMethod) =>
+    invoke<string>("claude_install_command", { method }),
 
   // Deploy
   deployApiBase: () => invoke<string>("deploy_api_base"),
