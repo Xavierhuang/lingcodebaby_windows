@@ -39,7 +39,16 @@ $VenvPython = Join-Path $WorkDir ".venv\Scripts\python.exe"
 & $VenvPython -m pip install --upgrade pip pyinstaller
 if ($env:QUINNY_SOURCE) {
     Write-Host "    installing quinny from source: $env:QUINNY_SOURCE"
-    & $VenvPython -m pip install -e $env:QUINNY_SOURCE
+    # NOT `pip install -e`. An editable install leaves only a __editable__
+    # finder shim in site-packages, which PyInstaller's static analysis cannot
+    # follow — it then collects ZERO quinny modules and reports no error.
+    # The `--add-data "$Grammar;quinny"` below still creates a quinny\ directory
+    # in the bundle, so at runtime `quinny` resolves as a namespace package and
+    # the import dies one level down with:
+    #     ModuleNotFoundError: No module named 'quinny.__main__'
+    # That shipped to Windows users. Reproduced and fixed 2026-09-07: a plain
+    # (non-editable) install of the same source freezes correctly.
+    & $VenvPython -m pip install $env:QUINNY_SOURCE
 } else {
     Write-Host "    installing quinny from PyPI"
     & $VenvPython -m pip install quinny
@@ -95,13 +104,38 @@ if (Test-Path $OutDir) {
 $FrozenDist = Join-Path $WorkDir "dist\quinny"
 Copy-Item -Path (Join-Path $FrozenDist "*") -Destination $OutDir -Recurse -Force
 
-# 7. Sanity check.
+# 7. Sanity check — RUN the binary, don't just look at it.
+#
+# This used to be `Test-Path $Exe` only. A frozen bundle that cannot import its
+# own entry module still produces an .exe, so the build reported success and
+# shipped a Quinny that died on first launch with a PyInstaller traceback.
+# Existence is not function: start it and require a zero exit.
 $Exe = Join-Path $OutDir "quinny.exe"
 if (-not (Test-Path $Exe)) {
     throw "Freeze completed but $Exe is missing — inspect $FrozenDist"
 }
+
+Write-Host "    smoke: $Exe --help"
+# $ErrorActionPreference is "Stop" for this script; with `2>&1` a native
+# command's stderr becomes error records and would throw here BEFORE the
+# exit-code check, hiding the traceback we actually want to print. Relax it
+# just for this call.
+$PrevEAP = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+$SmokeOut = & $Exe --help 2>&1
+$SmokeExit = $LASTEXITCODE
+$ErrorActionPreference = $PrevEAP
+if ($SmokeExit -ne 0) {
+    Write-Host ""
+    Write-Host "Freeze produced a binary that FAILS TO RUN:" -ForegroundColor Red
+    Write-Host ($SmokeOut | Out-String)
+    Write-Host "If this is 'No module named quinny.__main__', the quinny install"
+    Write-Host "was editable (pip install -e) and PyInstaller collected none of it."
+    throw "Quinny smoke test failed"
+}
+
 Write-Host ""
-Write-Host "==> Done. Frozen Quinny at: $Exe"
+Write-Host "==> Done. Frozen Quinny at: $Exe (smoke-tested)"
 Write-Host "    Now run: npm run tauri build"
 
 # 8. Best-effort cleanup — the tempdir is huge (~200 MB).

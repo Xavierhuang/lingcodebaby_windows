@@ -29,7 +29,16 @@ VENV_PY="$WORK_DIR/.venv/bin/python"
 "$VENV_PY" -m pip install --upgrade pip pyinstaller
 if [ -n "${QUINNY_SOURCE:-}" ]; then
     echo "    installing quinny from source: $QUINNY_SOURCE"
-    "$VENV_PY" -m pip install -e "$QUINNY_SOURCE"
+    # NOT `pip install -e`. An editable install leaves only a __editable__
+    # finder shim in site-packages, which PyInstaller's static analysis cannot
+    # follow — it then collects ZERO quinny modules and reports no error.
+    # The `--add-data "$GRAMMAR:quinny"` below still creates a quinny/ directory
+    # in the bundle, so at runtime `quinny` resolves as a namespace package and
+    # the import dies one level down with:
+    #     ModuleNotFoundError: No module named 'quinny.__main__'
+    # That shipped to Windows users. Reproduced and fixed 2026-09-07: a plain
+    # (non-editable) install of the same source freezes correctly.
+    "$VENV_PY" -m pip install "$QUINNY_SOURCE"
 else
     echo "    installing quinny from PyPI"
     "$VENV_PY" -m pip install quinny
@@ -68,9 +77,26 @@ else
 fi
 cp -R "$WORK_DIR/dist/quinny/." "$OUT_DIR/"
 
-# 7. Sanity check.
+# 7. Sanity check — RUN the binary, don't just look at it.
+#
+# This used to be `[ -x "$EXE" ]` only. A frozen bundle that cannot import its
+# own entry module still produces an executable file, so the build reported
+# success and shipped a Quinny that died on first launch. Existence is not
+# function: start it and require a zero exit.
 EXE="$OUT_DIR/quinny"
 [ -x "$EXE" ] || { echo "Freeze completed but $EXE is missing or non-executable" >&2; exit 1; }
+
+echo "    smoke: $EXE --help"
+if ! SMOKE_OUT="$("$EXE" --help 2>&1)"; then
+    echo "" >&2
+    echo "Freeze produced a binary that FAILS TO RUN:" >&2
+    echo "$SMOKE_OUT" >&2
+    echo "" >&2
+    echo "If this is 'No module named quinny.__main__', the quinny install was" >&2
+    echo "editable (pip install -e) and PyInstaller collected none of it." >&2
+    exit 1
+fi
+
 echo
-echo "==> Done. Frozen Quinny at: $EXE"
+echo "==> Done. Frozen Quinny at: $EXE (smoke-tested)"
 echo "    Now run: npm run tauri build"
