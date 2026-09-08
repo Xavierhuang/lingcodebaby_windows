@@ -41,13 +41,10 @@ if ($env:QUINNY_SOURCE) {
     Write-Host "    installing quinny from source: $env:QUINNY_SOURCE"
     # NOT `pip install -e`. An editable install leaves only a __editable__
     # finder shim in site-packages, which PyInstaller's static analysis cannot
-    # follow — it then collects ZERO quinny modules and reports no error.
-    # The `--add-data "$Grammar;quinny"` below still creates a quinny\ directory
-    # in the bundle, so at runtime `quinny` resolves as a namespace package and
-    # the import dies one level down with:
-    #     ModuleNotFoundError: No module named 'quinny.__main__'
-    # That shipped to Windows users. Reproduced and fixed 2026-09-07: a plain
-    # (non-editable) install of the same source freezes correctly.
+    # follow, so it would collect zero quinny modules. This is defensive: the
+    # v1.1.0 breakage was NOT caused by this (CI takes the PyPI branch below and
+    # still shipped broken) — see the entry-point note in step 4 for the actual
+    # cause. Kept because an editable install is a real PyInstaller hazard.
     & $VenvPython -m pip install $env:QUINNY_SOURCE
 } else {
     Write-Host "    installing quinny from PyPI"
@@ -66,9 +63,19 @@ if (-not (Test-Path $Grammar)) {
 }
 
 # 4. Write a tiny PyInstaller entry point that just calls quinny's CLI main.
+#
+# `quinny.cli`, NOT `quinny.__main__` — quinny has no __main__.py and never has.
+# Its console entry point is `quinny = quinny.cli:main` (see the wheel's
+# entry_points.txt). Importing a module that does not exist gave PyInstaller
+# nothing to follow, so it collected ZERO quinny modules and the frozen binary
+# died on launch with:
+#     ModuleNotFoundError: No module named 'quinny.__main__'
+# That is what shipped in v1.1.0 (2026-07-22) on Windows and Linux. The shipped
+# .deb contained 2308 modules and 0 of them were quinny; the working macOS
+# bundle contains 16, and quinny.__main__ is not among them.
 $Entry = Join-Path $WorkDir "_pyi_entry.py"
 @"
-from quinny.__main__ import main
+from quinny.cli import main
 if __name__ == "__main__":
     main()
 "@ | Set-Content -Path $Entry -Encoding utf8
@@ -81,6 +88,7 @@ try {
         --onedir `
         --name quinny `
         --add-data "$Grammar;quinny" `
+        --collect-submodules quinny `
         --collect-submodules lark `
         --collect-data lark `
         --collect-submodules anthropic `
@@ -129,8 +137,10 @@ if ($SmokeExit -ne 0) {
     Write-Host ""
     Write-Host "Freeze produced a binary that FAILS TO RUN:" -ForegroundColor Red
     Write-Host ($SmokeOut | Out-String)
-    Write-Host "If this is 'No module named quinny.__main__', the quinny install"
-    Write-Host "was editable (pip install -e) and PyInstaller collected none of it."
+    Write-Host "If this is a ModuleNotFoundError for a quinny submodule, PyInstaller"
+    Write-Host "collected none of quinny. Check step 4's entry point still matches the"
+    Write-Host "package's real console entry (quinny = quinny.cli:main), and that the"
+    Write-Host "install above was not editable."
     throw "Quinny smoke test failed"
 }
 
