@@ -90,6 +90,10 @@ fn build_menu(app: &tauri::AppHandle, prefs: &prefs::Prefs) -> tauri::Result<(Me
     let m_lingmodel = mk_model("lingmodel", "LingModel — LingCode account")?;
     let m_default = mk_model("default", "Default (CLI / account)")?;
     let m_opus = mk_model("opus", "Opus — highest quality, highest cost")?;
+    // Explicit Opus 5.5: the bare `opus` alias only reaches 5.5 on Claude Code
+    // 2.1.280+, and older CLIs reject the concrete id as unrecognized_model —
+    // chat.rs turns that into a hint to run `claude update`.
+    let m_opus55 = mk_model("opus55", "Opus 5.5 — newest Opus, needs Claude Code 2.1.280+")?;
     let m_sonnet = mk_model("sonnet", "Sonnet — balanced (recommended)")?;
     // Fable rows mirror the Mac model list (AppDelegate.setupMenu); chat.rs maps
     // the aliases to the real `claude-fable-5` / `claude-fable-5-1` ids when it
@@ -111,6 +115,7 @@ fn build_menu(app: &tauri::AppHandle, prefs: &prefs::Prefs) -> tauri::Result<(Me
             &m_lingmodel,
             &m_default,
             &m_opus,
+            &m_opus55,
             &m_sonnet,
             &m_fable51,
             &m_fable,

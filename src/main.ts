@@ -51,7 +51,7 @@ const modelLabel = app.querySelector(".model-label") as HTMLElement;
 // Current Claude model — controlled from the View → Claude Model menu.
 let currentModel = "lingmodel";
 const MODEL_NAMES: Record<string, string> = {
-  lingmodel: "LingModel", default: "Default", opus: "Opus", sonnet: "Sonnet",
+  lingmodel: "LingModel", default: "Default", opus: "Opus", opus55: "Opus 5.5", sonnet: "Sonnet",
   fable51: "Fable 5.1", fable: "Fable", haiku: "Haiku",
   "deepseek-v4-pro": "DeepSeek V4 Pro", "deepseek-v4-flash": "DeepSeek V4 Flash",
 };

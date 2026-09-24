@@ -298,22 +298,27 @@ fn cli_model_id(alias: &str) -> &str {
     match alias {
         "fable" => "claude-fable-5",
         "fable51" => "claude-fable-5-1",
+        "opus55" => "claude-opus-5-5",
         other => other,
     }
 }
 
-/// Fable 5.1 is gated on Claude Code >= 2.1.251; an older CLI gets a bare
-/// `claude_code_version_too_old` on stderr and an empty turn. Say what to do.
+/// Model availability has two gates and only one is public: the model can
+/// exist while the user's installed CLI does not know it yet. Fable 5.1 needs
+/// Claude Code >= 2.1.251 (`claude_code_version_too_old`); Opus 5.5 needs
+/// >= 2.1.280 (older CLIs answer `unrecognized_model`). Either way the turn
+/// comes back empty with the reason only on stderr, so lead with what to do.
 fn cli_too_old_hint(model: &str, stderr: &str) -> Option<&'static str> {
-    if stderr.contains("claude_code_version_too_old") {
-        Some(if model == "fable51" {
-            "Fable 5.1 needs Claude Code 2.1.251 or newer. Run `claude update` (or reinstall from Help → Welcome), then send again — or pick Fable 5, which has no version floor."
-        } else {
-            "This model needs a newer Claude Code CLI. Run `claude update`, then send again."
-        })
-    } else {
-        None
+    let gated = stderr.contains("claude_code_version_too_old")
+        || (stderr.contains("unrecognized_model") && stderr.contains(cli_model_id(model)));
+    if !gated {
+        return None;
     }
+    Some(match model {
+        "fable51" => "Fable 5.1 needs Claude Code 2.1.251 or newer. Run `claude update` (or reinstall from Help → Welcome), then send again — or pick Fable 5, which has no version floor.",
+        "opus55" => "Opus 5.5 needs Claude Code 2.1.280 or newer. Run `claude update` (or reinstall from Help → Welcome), then send again — or pick Opus, which uses whatever your CLI supports.",
+        _ => "This model needs a newer Claude Code CLI. Run `claude update`, then send again.",
+    })
 }
 
 #[cfg(test)]
@@ -324,14 +329,20 @@ mod model_tests {
     fn fable_aliases_map_to_concrete_ids() {
         assert_eq!(cli_model_id("fable"), "claude-fable-5");
         assert_eq!(cli_model_id("fable51"), "claude-fable-5-1");
+        assert_eq!(cli_model_id("opus55"), "claude-opus-5-5");
         assert_eq!(cli_model_id("opus"), "opus");
         assert_eq!(cli_model_id("deepseek-v4-pro"), "deepseek-v4-pro");
     }
 
     #[test]
-    fn too_old_hint_only_on_the_gate_error() {
+    fn too_old_hint_only_on_the_gate_errors() {
         assert!(cli_too_old_hint("fable51", "API Error: 400 claude_code_version_too_old").is_some());
         assert!(cli_too_old_hint("opus", "claude_code_version_too_old").unwrap().contains("claude update"));
+        // Opus 5.5 on Claude Code 2.1.258: rejected as unrecognized, not as too old.
+        let unrec = r#"[claude-code:unrecognized_model] {"model":"claude-opus-5-5"}"#;
+        assert!(cli_too_old_hint("opus55", unrec).unwrap().contains("2.1.280"));
+        // An unrecognized DIFFERENT model is not this gate.
+        assert!(cli_too_old_hint("opus55", r#"[claude-code:unrecognized_model] {"model":"deepseek-v4-pro"}"#).is_none());
         assert!(cli_too_old_hint("fable51", "something else").is_none());
     }
 }
