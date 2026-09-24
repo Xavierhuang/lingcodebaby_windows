@@ -1,5 +1,6 @@
 mod anthropic_key;
 mod chat;
+mod deepseek_key;
 mod deploy;
 mod endpoint;
 mod fsops;
@@ -36,6 +37,7 @@ fn build_menu(app: &tauri::AppHandle, prefs: &prefs::Prefs) -> tauri::Result<(Me
             &MenuItem::with_id(app, "check_updates", "Check for Updates…", true, None::<&str>)?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "anthropic_key", "Set Anthropic API Key…", true, None::<&str>)?,
+            &MenuItem::with_id(app, "deepseek_key", "Set DeepSeek API Key…", true, None::<&str>)?,
             &MenuItem::with_id(app, "custom_endpoint", "Custom Endpoint…", true, None::<&str>)?,
             &MenuItem::with_id(app, "sign_out", "Sign Out", true, None::<&str>)?,
             &PredefinedMenuItem::separator(app)?,
@@ -89,15 +91,33 @@ fn build_menu(app: &tauri::AppHandle, prefs: &prefs::Prefs) -> tauri::Result<(Me
     let m_default = mk_model("default", "Default (CLI / account)")?;
     let m_opus = mk_model("opus", "Opus — highest quality, highest cost")?;
     let m_sonnet = mk_model("sonnet", "Sonnet — balanced (recommended)")?;
-    // Fable is on the Mac model list (AppDelegate.setupMenu); chat.rs maps the
-    // alias to the real `claude-fable-5` id when it builds the CLI args.
+    // Fable rows mirror the Mac model list (AppDelegate.setupMenu); chat.rs maps
+    // the aliases to the real `claude-fable-5` / `claude-fable-5-1` ids when it
+    // builds the CLI args. Fable 5.1 needs the user's own `claude` CLI to be
+    // >= 2.1.251 — Baby runs whatever is installed rather than bundling one, so
+    // on an older CLI the API rejects it with claude_code_version_too_old;
+    // chat.rs turns that into a readable hint. Fable 5 has no floor.
+    let m_fable51 = mk_model("fable51", "Fable 5.1 — Claude 5.1, most capable")?;
     let m_fable = mk_model("fable", "Fable — Claude 5, fast")?;
     let m_haiku = mk_model("haiku", "Haiku — fastest, lowest cost")?;
+    // DeepSeek rows run the same CLI against DeepSeek's endpoint (deepseek_key).
+    let m_deepseek_pro = mk_model(deepseek_key::MENU_ROWS[0].0, deepseek_key::MENU_ROWS[0].1)?;
+    let m_deepseek_flash = mk_model(deepseek_key::MENU_ROWS[1].0, deepseek_key::MENU_ROWS[1].1)?;
     let model_menu = Submenu::with_items(
         app,
         "Claude Model",
         true,
-        &[&m_lingmodel, &m_default, &m_opus, &m_sonnet, &m_fable, &m_haiku],
+        &[
+            &m_lingmodel,
+            &m_default,
+            &m_opus,
+            &m_sonnet,
+            &m_fable51,
+            &m_fable,
+            &m_haiku,
+            &m_deepseek_pro,
+            &m_deepseek_flash,
+        ],
     )?;
 
     // Appearance submenu. The app followed the OS with no way to override it;
@@ -330,6 +350,9 @@ pub fn run() {
             anthropic_key::anthropic_key_present,
             anthropic_key::anthropic_key_save,
             anthropic_key::anthropic_key_delete,
+            deepseek_key::deepseek_key_present,
+            deepseek_key::deepseek_key_save,
+            deepseek_key::deepseek_key_delete,
             endpoint::endpoint_get_config,
             endpoint::endpoint_save_config,
             endpoint::endpoint_disable,

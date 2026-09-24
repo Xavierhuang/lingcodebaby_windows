@@ -12,7 +12,7 @@ fn default_appearance() -> String {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Prefs {
-    pub model: String,       // "lingmodel" | "default" | "opus" | "sonnet" | "fable" | "haiku"
+    pub model: String,       // "lingmodel" | "default" | "opus" | "sonnet" | "fable51" | "fable" | "haiku" | "deepseek-v4-pro" | "deepseek-v4-flash"
     pub play_sounds: bool,
     /// Custom endpoint state — the API key itself is in the OS Keychain
     /// (endpoint.rs), never in this JSON. Mirrors Mac ClaudeChat.m's

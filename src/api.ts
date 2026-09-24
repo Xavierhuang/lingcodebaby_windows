@@ -82,6 +82,9 @@ export const api = {
   anthropicKeyPresent: () => invoke<boolean>("anthropic_key_present"),
   anthropicKeySave: (key: string) => invoke<void>("anthropic_key_save", { key }),
   anthropicKeyDelete: () => invoke<void>("anthropic_key_delete"),
+  deepseekKeyPresent: () => invoke<boolean>("deepseek_key_present"),
+  deepseekKeySave: (key: string) => invoke<void>("deepseek_key_save", { key }),
+  deepseekKeyDelete: () => invoke<void>("deepseek_key_delete"),
 
   // Custom Anthropic-compatible endpoint (URL + key config sheet).
   endpointGetConfig: () => invoke<EndpointConfig>("endpoint_get_config"),

@@ -52,7 +52,8 @@ const modelLabel = app.querySelector(".model-label") as HTMLElement;
 let currentModel = "lingmodel";
 const MODEL_NAMES: Record<string, string> = {
   lingmodel: "LingModel", default: "Default", opus: "Opus", sonnet: "Sonnet",
-  fable: "Fable", haiku: "Haiku",
+  fable51: "Fable 5.1", fable: "Fable", haiku: "Haiku",
+  "deepseek-v4-pro": "DeepSeek V4 Pro", "deepseek-v4-flash": "DeepSeek V4 Flash",
 };
 function setModel(m: string, persist = true) {
   currentModel = m;
@@ -273,6 +274,28 @@ async function doConfigureAnthropicKey() {
   }
 }
 
+// Same shape for the DeepSeek key, used by the DeepSeek rows in View → Claude
+// Model. Mirrors Mac's setDeepSeekAPIKey: sheet (AppDelegate.m).
+async function doConfigureDeepSeekKey() {
+  const present = await api.deepseekKeyPresent();
+  const prompt = present
+    ? "DeepSeek API key (currently stored — leave empty to keep, or type a new one to replace; type 'delete' to clear). Used by the DeepSeek rows in View → Claude Model."
+    : "Paste your DeepSeek API key from platform.deepseek.com. Used by the DeepSeek rows in View → Claude Model; stored in the OS Keychain, never on disk:";
+  const value = await promptText(prompt, "");
+  if (value === null) return;
+  try {
+    if (value.trim().toLowerCase() === "delete") {
+      await api.deepseekKeyDelete();
+      await alertDialog("DeepSeek API key cleared.");
+    } else if (value.trim().length > 0) {
+      await api.deepseekKeySave(value);
+      await alertDialog("DeepSeek API key saved to the OS Keychain.");
+    }
+  } catch (e) {
+    await alertDialog("Could not save the DeepSeek API key: " + String(e));
+  }
+}
+
 // View ▸ New Conversation — clear the chat + saved history for this folder
 // (with a confirm, since it can't be undone). Mirrors Mac newConversation:.
 async function doNewConversation() {
@@ -355,6 +378,7 @@ listen<string>("menu", async (ev) => {
     case "deploy": await runDeploy(folder); break;
     case "custom_endpoint": await showEndpointSheet(); break;
     case "anthropic_key": await doConfigureAnthropicKey(); break;
+    case "deepseek_key": await doConfigureDeepSeekKey(); break;
     case "welcome": await showOnboarding(false); break;
     case "find": editor.openFind(); break;
     case "find_next": editor.findNext(); break;

@@ -291,13 +291,48 @@ fn parse_ask_user(text: &str) -> Option<(String, Vec<String>)> {
     Some((question, options))
 }
 
-/// Map a picker alias to the id the CLI expects. Only Fable differs — the menu
-/// shows the friendly family name while `--model` needs the concrete id.
-/// Mirrors LCBClaudeAdapter.m:287.
+/// Map a picker alias to the id the CLI expects. Only the Fable rows differ —
+/// the menu shows the friendly family name while `--model` needs the concrete
+/// id. Mirrors LCBClaudeAdapter.m:307-308.
 fn cli_model_id(alias: &str) -> &str {
     match alias {
         "fable" => "claude-fable-5",
+        "fable51" => "claude-fable-5-1",
         other => other,
+    }
+}
+
+/// Fable 5.1 is gated on Claude Code >= 2.1.251; an older CLI gets a bare
+/// `claude_code_version_too_old` on stderr and an empty turn. Say what to do.
+fn cli_too_old_hint(model: &str, stderr: &str) -> Option<&'static str> {
+    if stderr.contains("claude_code_version_too_old") {
+        Some(if model == "fable51" {
+            "Fable 5.1 needs Claude Code 2.1.251 or newer. Run `claude update` (or reinstall from Help → Welcome), then send again — or pick Fable 5, which has no version floor."
+        } else {
+            "This model needs a newer Claude Code CLI. Run `claude update`, then send again."
+        })
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod model_tests {
+    use super::*;
+
+    #[test]
+    fn fable_aliases_map_to_concrete_ids() {
+        assert_eq!(cli_model_id("fable"), "claude-fable-5");
+        assert_eq!(cli_model_id("fable51"), "claude-fable-5-1");
+        assert_eq!(cli_model_id("opus"), "opus");
+        assert_eq!(cli_model_id("deepseek-v4-pro"), "deepseek-v4-pro");
+    }
+
+    #[test]
+    fn too_old_hint_only_on_the_gate_error() {
+        assert!(cli_too_old_hint("fable51", "API Error: 400 claude_code_version_too_old").is_some());
+        assert!(cli_too_old_hint("opus", "claude_code_version_too_old").unwrap().contains("claude update"));
+        assert!(cli_too_old_hint("fable51", "something else").is_none());
     }
 }
 
@@ -393,9 +428,10 @@ pub async fn claude_send(
     }
     // Endpoint routing priority (highest wins). Mirrors ClaudeChat.m:1462-1482.
     //   1. Custom endpoint (BYO URL + x-api-key) — overrides everything.
-    //   2. LingModel proxy (LingCode account bearer).
-    //   3. Personal Anthropic API key from Keychain (env fallback for signed-out).
-    //   4. Claude subscription (env unchanged — CLI uses `claude login`).
+    //   2. A DeepSeek row (DeepSeek's Anthropic-compatible endpoint + DeepSeek key).
+    //   3. LingModel proxy (LingCode account bearer).
+    //   4. Personal Anthropic API key from Keychain (env fallback for signed-out).
+    //   5. Claude subscription (env unchanged — CLI uses `claude login`).
     if crate::endpoint::is_active() {
         let prefs = crate::prefs::get_prefs();
         let key = crate::endpoint::get_key()
@@ -409,6 +445,16 @@ pub async fn claude_send(
         if model != LINGMODEL_TAG && model != "default" {
             std_cmd.arg("--model").arg(cli_model_id(&model));
         }
+    } else if crate::deepseek_key::is_deepseek_model(&model) {
+        // DeepSeek row: same CLI, DeepSeek's endpoint, the user's DeepSeek key
+        // as the bearer. Mirrors LCBDeepSeek.m applyRouteForModel.
+        let key = crate::deepseek_key::get()
+            .ok_or_else(|| crate::deepseek_key::NO_KEY_MESSAGE.to_string())?;
+        std_cmd.arg("--model").arg(&model);
+        std_cmd.env("ANTHROPIC_BASE_URL", crate::deepseek_key::BASE_URL);
+        std_cmd.env("ANTHROPIC_AUTH_TOKEN", key);
+        // An installed Anthropic key would otherwise reach DeepSeek as x-api-key.
+        std_cmd.env_remove("ANTHROPIC_API_KEY");
     } else if model == LINGMODEL_TAG {
         // LingModel: route the same `claude` CLI at the LingCode proxy using the
         // user's LingCode account token, and hand the engine the upstream model.
@@ -595,7 +641,12 @@ pub async fn claude_send(
         // Turn ended early on a question; suppress "done" so the UI shows chips.
         let _ = on_event.send(json!({ "kind": "awaiting" }));
     } else {
-        let _ = on_event.send(json!({ "kind": "done", "stderr": stderr_buf.trim() }));
+        // Lead with a readable hint when the CLI was too old for the model.
+        let stderr_out = match cli_too_old_hint(&model, &stderr_buf) {
+            Some(hint) => format!("{hint}\n\n{}", stderr_buf.trim()),
+            None => stderr_buf.trim().to_string(),
+        };
+        let _ = on_event.send(json!({ "kind": "done", "stderr": stderr_out }));
     }
     Ok(())
 }
