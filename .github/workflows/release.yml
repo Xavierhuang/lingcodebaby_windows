@@ -30,7 +30,47 @@ on:
   workflow_dispatch:
 
 jobs:
+  # One job makes the draft release before any build starts. With three build
+  # jobs racing "find or create a draft for this tag", two of them created
+  # separate drafts in the same second (v1.3.0, 2026-09-25): Linux assets on
+  # one, both Windows installers on the other, and a latest.json on each that
+  # knew only its own platforms. Creating it once and handing the id to every
+  # build job makes tauri-action upload into a single release and merge the
+  # updater manifest across platforms.
+  create-release:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    outputs:
+      release_id: ${{ steps.draft.outputs.id }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create (or reuse) the draft release
+        id: draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG="${{ github.ref_name }}"
+          else
+            TAG="v$(jq -r .version src-tauri/tauri.conf.json)"
+          fi
+          # A draft cannot be looked up by tag, so scan the release list.
+          ID=$(gh api "repos/${{ github.repository }}/releases?per_page=50" \
+               --jq ".[] | select(.tag_name==\"$TAG\" and .draft==true) | .id" | head -1)
+          if [ -z "$ID" ]; then
+            ID=$(gh api -X POST "repos/${{ github.repository }}/releases" \
+                 -f tag_name="$TAG" -f name="LingCodeBaby $TAG" \
+                 -f body="See the assets to download and install." \
+                 -F draft=true -F prerelease=false --jq .id)
+            echo "created draft $TAG (id $ID)"
+          else
+            echo "reusing draft $TAG (id $ID)"
+          fi
+          echo "id=$ID" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: create-release
     permissions:
       contents: write
     # Promote secrets to job env so `if:` conditions can gate on them.
@@ -129,10 +169,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           # projectPath: "."          # set if the app is in a subfolder
-          tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
-          releaseName: "LingCodeBaby v__VERSION__"
-          releaseBody: "See the assets to download and install."
-          releaseDraft: true
-          prerelease: false
+          # Upload into the draft create-release made; tauri-action merges each
+          # platform into the one latest.json already on that release.
+          releaseId: ${{ needs.create-release.outputs.release_id }}
           includeUpdaterJson: true
           args: ${{ matrix.args }}
