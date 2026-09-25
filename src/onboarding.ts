@@ -58,8 +58,8 @@ export async function showOnboarding(hardGate: boolean): Promise<void> {
           <button class="onboarding-card" data-choice="subscription">
             <div class="onboarding-card-title">Claude subscription</div>
             <div class="onboarding-card-body">
-              Use the account behind <code>claude login</code> in your
-              terminal (Pro / Team / etc.). Nothing to configure here.
+              Claude Code is included with LingCodeBaby. Sign in once with
+              your Claude account (Pro / Team / etc.); nothing to install.
             </div>
           </button>
           <button class="onboarding-card" data-choice="endpoint">
@@ -120,12 +120,17 @@ export async function showOnboarding(hardGate: boolean): Promise<void> {
               break;
             }
             case "subscription": {
-              // Nothing to configure — the CLI handles `claude login` itself.
-              // Just close the gate so the user can start chatting.
-              await alertDialog(
-                "Make sure you've run `claude login` in your terminal at least once. " +
-                "The Claude Code CLI stores credentials in its own config; the app inherits them.",
-              );
+              // The CLI owns the login (credentials live in ~/.claude and the
+              // app inherits them). The bundled copy is not on PATH, so open
+              // the sign-in for the user instead of telling them to type it.
+              try {
+                await alertDialog(await api.claudeLogin());
+              } catch (e) {
+                await alertDialog(
+                  "Couldn't open the sign-in. If you have Claude Code installed, run `claude login` " +
+                  "in a terminal once; the app inherits it. " + String(e),
+                );
+              }
               await finish();
               break;
             }

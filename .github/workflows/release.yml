@@ -37,6 +37,10 @@ jobs:
     # (GitHub Actions doesn't allow direct `secrets.*` refs inside if-expressions.)
     env:
       QUINNY_SOURCE_REPO: ${{ secrets.QUINNY_SOURCE_REPO }}
+      # Claude Code CLI shipped inside the Windows installers (npm platform
+      # package @anthropic-ai/claude-agent-sdk-win32-<arch>). Bump to ship a
+      # newer CLI; see src-tauri/binaries/claude/README.md.
+      CLAUDE_SDK_VERSION: "0.3.282"
     strategy:
       fail-fast: false
       matrix:
@@ -47,9 +51,11 @@ jobs:
           - platform: windows-latest         # Windows x64 (NSIS)
             args: "--target x86_64-pc-windows-msvc"
             rust-targets: "x86_64-pc-windows-msvc"
+            claude-arch: "x64"
           - platform: windows-latest         # Windows arm64 (NSIS)
             args: "--target aarch64-pc-windows-msvc"
             rust-targets: "aarch64-pc-windows-msvc"
+            claude-arch: "arm64"
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -102,6 +108,13 @@ jobs:
           # x64 quinny.exe runs under Windows-on-ARM's x64 emulation. Both
           # matrix entries just freeze x64 and bundle the same binary.
           pwsh -File scripts/build-quinny-windows.ps1
+
+      - name: Fetch Claude Code CLI (Windows)
+        if: startsWith(matrix.platform, 'windows')
+        shell: pwsh
+        run: |
+          # Each Windows job fetches its own architecture, so arm64 runs native.
+          pwsh -File scripts/fetch-claude-windows.ps1 -Arch ${{ matrix.claude-arch }}
 
       - name: Build Quinny (Linux)
         if: startsWith(matrix.platform, 'ubuntu')

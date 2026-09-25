@@ -11,6 +11,8 @@ src-tauri/target/
 # The README.md placeholder stays tracked so the dir exists in fresh clones.
 src-tauri/binaries/quinny/*
 !src-tauri/binaries/quinny/README.md
+src-tauri/binaries/claude/*
+!src-tauri/binaries/claude/README.md
 
 # updater signing keys / secrets (never commit)
 *.key

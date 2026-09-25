@@ -105,6 +105,9 @@ mod project_key_tests {
     /// The key already written to disk before the fix must keep resolving, or
     /// existing backends would be orphaned by the upgrade.
     #[test]
+    // A Windows path: only Windows treats `\` as a separator, so this hash
+    // differs on a Mac dev box (first run of the suite there, 2026-09-25).
+    #[cfg(windows)]
     fn preserves_the_key_already_on_disk() {
         assert_eq!(
             cloud_project_key(r"D:\Desktop\projects\clientProject\antisocial"),

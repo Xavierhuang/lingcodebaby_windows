@@ -113,7 +113,18 @@ fn is_native_exe(path: &std::path::Path) -> bool {
 
 /// Locate a `claude` executable. Returns a spawnable native binary or an
 /// actionable error — never a batch shim.
-fn find_claude() -> Result<PathBuf, String> {
+/// Resolve the CLI to run, preferring a copy this build shipped
+/// (`claude_bin::bundled_exe`) over anything installed on the machine. The
+/// bundled copy is a known version that ships with the app; a host install is
+/// still honoured when no bundled copy exists (Linux/mac builds, or a broken
+/// install). Login state is unaffected by the choice: Claude Code keeps it in
+/// ~/.claude, not beside the binary.
+pub(crate) fn find_claude_with(bundled: Option<PathBuf>) -> Result<PathBuf, String> {
+    if let Some(b) = bundled {
+        if is_native_exe(&b) {
+            return Ok(b);
+        }
+    }
     let home = dirs::home_dir();
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Some(h) = &home {
@@ -186,7 +197,44 @@ fn find_claude() -> Result<PathBuf, String> {
             shim.display()
         ));
     }
+    if cfg!(windows) {
+        // Windows installers ship the CLI; reaching here means the install is
+        // incomplete, not that the user forgot a download.
+        return Err("Could not find the `claude` CLI. This build includes it, so reinstall LingCodeBaby — or install Claude Code yourself and sign in with `claude login`.".into());
+    }
     Err("Could not find the `claude` CLI. Install Claude Code and sign in with `claude login`.".into())
+}
+
+#[cfg(test)]
+mod bundled_tests {
+    use super::*;
+    use crate::claude_bin::EXE;
+
+    fn scratch(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("lcb-bundled-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// A fresh Windows install has no host `claude`; the shipped copy must win
+    /// before any home-dir or PATH probing, or the user is back to downloading.
+    #[test]
+    fn a_shipped_bundled_copy_wins_over_every_host_lookup() {
+        let dir = scratch("present");
+        let exe = dir.join(EXE);
+        std::fs::write(&exe, b"MZ").unwrap();
+        assert_eq!(find_claude_with(Some(exe.clone())), Ok(exe));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A bundled path that does not exist (Linux builds, or a damaged install)
+    /// must behave exactly like having no bundled copy at all.
+    #[test]
+    fn a_missing_bundled_copy_falls_through_to_the_host_lookup() {
+        let ghost = scratch("missing").join(EXE);
+        assert_eq!(find_claude_with(Some(ghost)), find_claude_with(None));
+    }
 }
 
 #[cfg(all(test, target_os = "windows"))]
@@ -221,7 +269,7 @@ mod shim_tests {
     #[test]
     #[ignore]
     fn resolves_on_this_machine() {
-        match super::find_claude() {
+        match super::find_claude_with(None) {
             Ok(p) => {
                 println!("resolved: {}", p.display());
                 assert!(super::is_native_exe(&p), "must be a spawnable .exe, not a shim");
@@ -308,11 +356,19 @@ fn cli_model_id(alias: &str) -> &str {
 /// Claude Code >= 2.1.251 (`claude_code_version_too_old`); Opus 5.5 needs
 /// >= 2.1.280 (older CLIs answer `unrecognized_model`). Either way the turn
 /// comes back empty with the reason only on stderr, so lead with what to do.
-fn cli_too_old_hint(model: &str, stderr: &str) -> Option<&'static str> {
+fn cli_too_old_hint(model: &str, stderr: &str, bundled: bool) -> Option<&'static str> {
     let gated = stderr.contains("claude_code_version_too_old")
         || (stderr.contains("unrecognized_model") && stderr.contains(cli_model_id(model)));
     if !gated {
         return None;
+    }
+    if bundled {
+        // `claude update` cannot touch the shipped copy; the CLI moves with the app.
+        return Some(match model {
+            "fable51" => "Fable 5.1 needs Claude Code 2.1.251 or newer. Update LingCodeBaby (Help → Check for Updates), then send again — or pick Fable 5, which has no version floor.",
+            "opus55" => "Opus 5.5 needs Claude Code 2.1.280 or newer. Update LingCodeBaby (Help → Check for Updates), then send again — or pick Opus, which uses whatever the bundled CLI supports.",
+            _ => "This model needs a newer Claude Code CLI. Update LingCodeBaby (Help → Check for Updates), then send again.",
+        });
     }
     Some(match model {
         "fable51" => "Fable 5.1 needs Claude Code 2.1.251 or newer. Run `claude update` (or reinstall from Help → Welcome), then send again — or pick Fable 5, which has no version floor.",
@@ -336,14 +392,24 @@ mod model_tests {
 
     #[test]
     fn too_old_hint_only_on_the_gate_errors() {
-        assert!(cli_too_old_hint("fable51", "API Error: 400 claude_code_version_too_old").is_some());
-        assert!(cli_too_old_hint("opus", "claude_code_version_too_old").unwrap().contains("claude update"));
+        assert!(cli_too_old_hint("fable51", "API Error: 400 claude_code_version_too_old", false).is_some());
+        assert!(cli_too_old_hint("opus", "claude_code_version_too_old", false).unwrap().contains("claude update"));
         // Opus 5.5 on Claude Code 2.1.258: rejected as unrecognized, not as too old.
         let unrec = r#"[claude-code:unrecognized_model] {"model":"claude-opus-5-5"}"#;
-        assert!(cli_too_old_hint("opus55", unrec).unwrap().contains("2.1.280"));
+        assert!(cli_too_old_hint("opus55", unrec, false).unwrap().contains("2.1.280"));
         // An unrecognized DIFFERENT model is not this gate.
-        assert!(cli_too_old_hint("opus55", r#"[claude-code:unrecognized_model] {"model":"deepseek-v4-pro"}"#).is_none());
-        assert!(cli_too_old_hint("fable51", "something else").is_none());
+        assert!(cli_too_old_hint("opus55", r#"[claude-code:unrecognized_model] {"model":"deepseek-v4-pro"}"#, false).is_none());
+        assert!(cli_too_old_hint("fable51", "something else", false).is_none());
+    }
+
+    /// With the shipped CLI, `claude update` is the wrong advice: it cannot
+    /// replace a binary inside the install directory. Point at the app update.
+    #[test]
+    fn too_old_hint_points_bundled_users_at_the_app_update() {
+        let hint = cli_too_old_hint("opus55", "claude_code_version_too_old", true).unwrap();
+        assert!(hint.contains("Update LingCodeBaby"));
+        assert!(!hint.contains("claude update"));
+        assert!(cli_too_old_hint("opus55", "something else", true).is_none());
     }
 }
 
@@ -379,7 +445,9 @@ pub async fn claude_send(
     attachments: Option<Vec<String>>,
     on_event: Channel<Value>,
 ) -> Result<(), String> {
-    let bin = find_claude()?;
+    let bundled = crate::claude_bin::bundled_exe(&app);
+    let bin = find_claude_with(bundled.clone())?;
+    let using_bundled = bundled.as_deref() == Some(bin.as_path());
     let message = prompt_with_attachments(&message, &attachments.unwrap_or_default());
 
     // When signed in, wire the LingCode Cloud backend into this workspace's
@@ -407,6 +475,12 @@ pub async fn claude_send(
     // Build a std Command (so we can set Windows creation flags), then convert
     // to a tokio Command for async stdout streaming.
     let mut std_cmd = std::process::Command::new(&bin);
+    if using_bundled {
+        // The shipped copy sits under the install directory and cannot replace
+        // itself; Claude Code's self-updater would only log failures. Newer
+        // CLIs arrive with LingCodeBaby updates (CLAUDE_SDK_VERSION in release.yml).
+        std_cmd.env("DISABLE_AUTOUPDATER", "1");
+    }
     std_cmd
         .arg("-p")
         .arg(&message)
@@ -653,7 +727,7 @@ pub async fn claude_send(
         let _ = on_event.send(json!({ "kind": "awaiting" }));
     } else {
         // Lead with a readable hint when the CLI was too old for the model.
-        let stderr_out = match cli_too_old_hint(&model, &stderr_buf) {
+        let stderr_out = match cli_too_old_hint(&model, &stderr_buf, using_bundled) {
             Some(hint) => format!("{hint}\n\n{}", stderr_buf.trim()),
             None => stderr_buf.trim().to_string(),
         };

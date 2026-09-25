@@ -1,5 +1,6 @@
 mod anthropic_key;
 mod chat;
+mod claude_bin;
 mod deepseek_key;
 mod deploy;
 mod endpoint;
@@ -332,6 +333,7 @@ pub fn run() {
             prefs::set_prefs,
             chat::claude_send,
             chat::claude_abort,
+            claude_bin::claude_login,
             history::history_load,
             history::history_save,
             history::history_clear,

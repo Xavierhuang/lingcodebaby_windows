@@ -41,6 +41,9 @@ export const api = {
   setPrefs: (prefs: Prefs) => invoke<void>("set_prefs", { prefs }),
 
   claudeAbort: () => invoke<void>("claude_abort"),
+  // Opens a console running `claude login` with the CLI the chat uses (the
+  // bundled copy on Windows, which is not on the user's PATH).
+  claudeLogin: () => invoke<string>("claude_login"),
 
   // Per-project chat transcript + attachments under <project>/.lingcode/.
   historyLoad: (folder: string) => invoke<StoredHistory | null>("history_load", { folder }),
