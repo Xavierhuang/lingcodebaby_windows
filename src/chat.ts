@@ -1,4 +1,6 @@
-import { claudeSend, ChatEvent, api, StoredHistory, StoredMessage } from "./api";
+import { claudeSend, ChatEvent, api } from "./api";
+import { ChatDoc, foldTurns, outcomeOptions } from "./simple-logic";
+import { ChatStore, titleFor } from "./conversations";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { alertDialog } from "./ui";
 
@@ -7,16 +9,15 @@ type Kind = "user" | "assistant" | "note" | "thinking" | "tool" | "edit";
 
 interface Entry {
   el: HTMLElement;
-  clean: boolean;   // shown even with "Show Claude Thinking" off
+  clean: boolean;   // shown even with "Show all steps" off
   kind: Kind;
   text: string;     // plain text, so the row can be re-rendered on restore
 }
 
-const GREETING_NO_FOLDER =
-  "Open a folder, then ask me to read or change files in it. I run on your " +
-  "LingCode account (LingModel) by default — no separate Claude subscription needed.";
-const GREETING_FOLDER = "Ask me to read or change files in the current folder.";
-const GREETING_CLEARED = "New conversation. Ask me to read or change files in the current folder.";
+/** The Mac SimpleEmptyStateView chips, as prompts or actions. */
+const EXPLAIN_PROMPT =
+  "Explain what this app does in plain English, for someone who doesn't read code: " +
+  "what it's for, its main screens, and what happens when I use each one. Keep it short.";
 
 export class ChatPanel {
   getCwd: () => string | null = () => null;
@@ -29,21 +30,39 @@ export class ChatPanel {
    *  equivalent (taskbar attention). */
   onAskUser: () => void = () => {};
   getModel: () => string = () => "lingmodel";
+  /** The composer's model picker changed. main.ts persists it. */
+  onModelChange: (model: string) => void = () => {};
+  /** Empty-state chips that belong to the window, not the chat. */
+  onRunApp: () => void = () => {};
+  onPublish: () => void = () => {};
+  onOpenFolder: () => void = () => {};
+  /** A turn finished, or a chat was saved — the conversations list and the
+   *  Review tab re-read from here. */
+  onChatSaved: (doc: ChatDoc) => void = () => {};
+  onBusyChange: (busy: boolean) => void = () => {};
   // Gate a send on required auth (e.g. LingModel needs a LingCode sign-in).
   // Return false to abort the send. Set from main.ts.
   ensureAuth: (model: string) => Promise<boolean> = async () => true;
   playSounds = true;
   private showThinking = false;
+  private showAllSteps = false;
   private session: string | null = null;
   private busy = false;
   private interrupted = false;
   private root: string | null = null;
+  private store: ChatStore | null = null;
+  private doc: ChatDoc | null = null;
+  private openFolds = new Set<number>();
 
   private transcript: HTMLElement;
+  private emptyEl: HTMLElement;
   private optionsEl: HTMLElement;
   private attachEl: HTMLElement;
   private input: HTMLTextAreaElement;
   private sendBtn: HTMLButtonElement;
+  private modelSelect: HTMLSelectElement;
+  private stepsToggle: HTMLInputElement;
+  private scrollEl: HTMLElement;
   private dotsTimer: number | null = null;
   private thinkingLine: HTMLElement | null = null;
   private thinkStart = 0;
@@ -59,20 +78,36 @@ export class ChatPanel {
 
   constructor(root: HTMLElement) {
     root.innerHTML = `
-      <div class="transcript"></div>
-      <div class="options"></div>
-      <div class="attachments"></div>
-      <div class="chat-input-row">
-        <textarea class="chat-input" placeholder="Ask Claude…" rows="1"></textarea>
-        <button class="send-btn">Send</button>
-      </div>`;
+      <div class="chat-scroll"><div class="chat-column">
+        <div class="empty-state" hidden></div>
+        <div class="transcript"></div>
+        <div class="options"></div>
+      </div></div>
+      <div class="composer-wrap"><div class="composer-inner">
+        <div class="composer">
+          <div class="attachments"></div>
+          <textarea class="chat-input" placeholder="What should we work on?" rows="1"></textarea>
+          <div class="composer-row"><span class="spacer"></span><button class="send-btn">Send</button></div>
+        </div>
+        <div class="composer-actions">
+          <select class="model-select" title="Model"></select>
+          <label class="steps-toggle"><input type="checkbox" class="steps"/> Show all steps</label>
+        </div>
+      </div></div>`;
+    this.scrollEl = root.querySelector(".chat-scroll") as HTMLElement;
+    this.emptyEl = root.querySelector(".empty-state") as HTMLElement;
     this.transcript = root.querySelector(".transcript") as HTMLElement;
     this.optionsEl = root.querySelector(".options") as HTMLElement;
     this.attachEl = root.querySelector(".attachments") as HTMLElement;
     this.input = root.querySelector(".chat-input") as HTMLTextAreaElement;
     this.sendBtn = root.querySelector(".send-btn") as HTMLButtonElement;
+    this.modelSelect = root.querySelector(".model-select") as HTMLSelectElement;
+    this.stepsToggle = root.querySelector(".steps") as HTMLInputElement;
+    this.modelSelect.onchange = () => this.onModelChange(this.modelSelect.value);
+    this.stepsToggle.onchange = () => this.setShowAllSteps(this.stepsToggle.checked);
 
-    this.sendBtn.onclick = () => this.send();
+    // Stop takes Send's place while a turn runs (the Mac's stopInComposer).
+    this.sendBtn.onclick = () => { if (this.busy) this.abort(); else this.send(); };
     this.input.onkeydown = (e) => {
       if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); this.send(); }
       // Escape clears a pending attachment first (Mac escapeHandler), and only
@@ -84,7 +119,7 @@ export class ChatPanel {
     };
     this.input.oninput = () => {
       this.input.style.height = "auto";
-      this.input.style.height = Math.min(this.input.scrollHeight, 140) + "px";
+      this.input.style.height = Math.min(this.input.scrollHeight, 160) + "px";
     };
     // Paste a screenshot straight into the composer (Mac imagePasteHandler).
     this.input.addEventListener("paste", (e) => {
@@ -97,83 +132,163 @@ export class ChatPanel {
         }
       }
     });
-    // Drag & drop onto the chat pane.
-    root.addEventListener("dragover", (e) => { e.preventDefault(); root.classList.add("drop-target"); });
-    root.addEventListener("dragleave", () => root.classList.remove("drop-target"));
+    // Drag & drop onto the composer.
+    const composer = root.querySelector(".composer") as HTMLElement;
+    root.addEventListener("dragover", (e) => { e.preventDefault(); composer.classList.add("drop-target"); });
+    root.addEventListener("dragleave", () => composer.classList.remove("drop-target"));
     root.addEventListener("drop", (e) => {
       e.preventDefault();
-      root.classList.remove("drop-target");
+      composer.classList.remove("drop-target");
       for (const file of Array.from(e.dataTransfer?.files ?? [])) this.attachFile(file);
     });
 
-    this.append(GREETING_NO_FOLDER, "assistant", true, "Claude");
+    this.renderEmptyState();
+  }
+
+  /** Fill the composer's model picker (Mac OutcomeModelPicker shape). */
+  setModelOptions(names: Record<string, string>, current: string) {
+    this.modelSelect.innerHTML = "";
+    for (const group of outcomeOptions(names)) {
+      const parent: HTMLElement = group.label ? Object.assign(document.createElement("optgroup"), { label: group.label }) : this.modelSelect;
+      for (const o of group.options) {
+        const opt = document.createElement("option");
+        opt.value = o.value; opt.textContent = o.label;
+        parent.appendChild(opt);
+      }
+      if (parent !== this.modelSelect) this.modelSelect.appendChild(parent);
+    }
+    this.modelSelect.value = current;
+    if (this.modelSelect.value !== current) { const opt = document.createElement("option"); opt.value = current; opt.textContent = current; this.modelSelect.appendChild(opt); this.modelSelect.value = current; }
+  }
+  setCurrentModel(model: string) { this.modelSelect.value = model; }
+
+  setShowAllSteps(on: boolean) {
+    this.showAllSteps = on;
+    this.stepsToggle.checked = on;
+    this.applyFolds();
+  }
+  getShowAllSteps() { return this.showAllSteps; }
+
+  prefill(text: string) { this.input.value = text; this.input.focus(); this.input.setSelectionRange(text.length, text.length); }
+
+  /** Files the agent edited in this chat, newest first, for the Review tab. */
+  editedFiles(): Array<{ file: string; diff: string }> {
+    const out: Array<{ file: string; diff: string }> = [];
+    for (const e of [...this.entries].reverse()) {
+      if (e.kind !== "edit") continue;
+      const nl = e.text.indexOf("\n");
+      const head = nl >= 0 ? e.text.slice(0, nl) : e.text;
+      const file = head.replace(/^✏️\s*\S+\s*/, "").trim() || "(file)";
+      out.push({ file, diff: nl >= 0 ? e.text.slice(nl + 1) : "" });
+    }
+    return out;
   }
 
   // ---- project root / persistence -----------------------------------------
 
-  /** Point the panel at a project folder: restore that folder's saved
-   *  conversation (transcript + CLI session for `--resume`), or start fresh
-   *  with the folder greeting. Mirrors ClaudeChat.setRootURL:. */
-  async setRoot(folder: string | null) {
+  /** Point the panel at a project folder's chat store, or none. */
+  setStore(folder: string | null, store: ChatStore | null) {
     if (this.busy) this.abort();
     this.root = folder;
+    this.store = store;
+    this.doc = null;
     this.session = null;
     this.pendingAttachments = [];
     this.pendingPrompts = [];
     this.refreshAttachmentBar();
     this.clearOptions();
-    if (!folder) return;
-
-    let doc: StoredHistory | null = null;
-    try { doc = await api.historyLoad(folder); } catch { /* start fresh */ }
-
-    this.transcript.innerHTML = "";
-    this.entries = [];
-    if (doc && Array.isArray(doc.messages) && doc.messages.length) {
-      // A legacy adoption carries the rows but not the session id, so the two
-      // apps don't `claude --resume` the same CLI session.
-      this.session = doc.adopted_legacy ? null : (doc.session ?? null);
-      for (const m of doc.messages) this.restoreRow(m);
-      this.transcript.scrollTop = this.transcript.scrollHeight;
-      return;
-    }
-    this.append(GREETING_FOLDER, "assistant", true, "Claude");
+    this.resetTranscript();
+    this.renderEmptyState();
   }
 
-  /** Clear the chat, the saved history for this folder, and the CLI session so
-   *  the agent forgets the prior context too. Mirrors clearConversation. */
-  async clearConversation() {
-    this.abort();
+  /** Show one chat: its rows, and its CLI session id for `--resume`. */
+  openChat(doc: ChatDoc) {
+    if (this.busy) this.abort();
+    this.doc = doc;
+    this.session = doc.session ?? null;
+    this.openFolds.clear();
+    this.clearOptions();
+    this.resetTranscript();
+    for (const m of doc.messages) this.restoreRow(m);
+    this.applyFolds();
+    this.renderEmptyState();
+    this.scrollEl.scrollTop = this.scrollEl.scrollHeight;
+  }
+
+  currentChatId(): string | null { return this.doc ? this.doc.id : null; }
+
+  private resetTranscript() {
     this.transcript.innerHTML = "";
     this.entries = [];
-    this.session = null;
-    this.clearOptions();
-    this.pendingPrompts = [];
-    await this.clearAttachments();
-    if (this.root) {
-      try { await api.historyClear(this.root); } catch { /* best-effort */ }
-    }
-    this.append(GREETING_CLEARED, "assistant", true, "Claude");
   }
 
   private async saveHistory() {
-    if (!this.root || !this.entries.length) return;
-    const messages: StoredMessage[] = this.entries.map((e) => ({
-      kind: e.kind, text: e.text, clean: e.clean,
-    }));
-    try {
-      await api.historySave(this.root, {
-        session: this.session,
-        model: this.getModel(),
-        messages,
-      });
-    } catch { /* a failed save must never break the chat */ }
+    if (!this.store || !this.doc || !this.entries.length) return;
+    const doc: ChatDoc = {
+      ...this.doc,
+      session: this.session,
+      model: this.getModel(),
+      updatedAt: Date.now(),
+      messages: this.entries.map((e) => ({ kind: e.kind, text: e.text, clean: e.clean })),
+    };
+    doc.title = titleFor(doc);
+    this.doc = doc;
+    try { await this.store.save(doc); } catch { /* a failed save must never break the chat */ }
+    this.onChatSaved(doc);
   }
 
-  private restoreRow(m: StoredMessage) {
+  private restoreRow(m: { kind: string; text: string; clean?: boolean }) {
     const kind = (m.kind || "note") as Kind;
     const role = kind === "user" ? "You" : kind === "assistant" ? "Claude" : undefined;
-    this.append(m.text ?? "", kind, m.clean !== false, role);
+    this.append(m.text ?? "", kind, m.clean !== false, role, false);
+  }
+
+  private renderEmptyState() {
+    const show = this.entries.length === 0;
+    this.emptyEl.hidden = !show;
+    if (!show) return;
+    if (!this.root) {
+      this.emptyEl.innerHTML = `<div class="no-project"><h1>Open a project to start</h1><span>Pick a folder and this becomes its chat.</span><button class="btn primary open">Open folder…</button></div>`;
+      (this.emptyEl.querySelector(".open") as HTMLButtonElement).onclick = () => this.onOpenFolder();
+      return;
+    }
+    this.emptyEl.innerHTML = `
+      <h1>What should we work on?</h1>
+      <div class="status">Ask for a change, or pick a starting point.</div>
+      <div class="empty-grid">
+        <button class="empty-chip" data-chip="run"><b>Run the app</b><span>Open the preview</span></button>
+        <button class="empty-chip" data-chip="change"><b>Change something I see</b><span>Describe what to change</span></button>
+        <button class="empty-chip" data-chip="publish"><b>Publish</b><span>Put it online</span></button>
+        <button class="empty-chip" data-chip="explain"><b>Explain my app</b><span>Plain-English tour of what it does</span></button>
+      </div>`;
+    this.emptyEl.querySelectorAll<HTMLButtonElement>("[data-chip]").forEach((b) => {
+      b.onclick = () => {
+        switch (b.dataset.chip) {
+          case "run": this.onRunApp(); break;
+          case "change": this.prefill("Change the "); break;
+          case "publish": this.onPublish(); break;
+          case "explain": void this.send(EXPLAIN_PROMPT); break;
+        }
+      };
+    });
+  }
+
+  /** Fold each finished turn's steps behind one summary line (Mac TranscriptTurnSummary). */
+  private applyFolds() {
+    this.transcript.querySelectorAll(".turn-summary").forEach((el) => el.remove());
+    for (const e of this.entries) e.el.style.display = (this.showThinking || e.clean) ? "" : "none";
+    if (this.showAllSteps) return;
+    const folds = foldTurns(this.entries.map((e) => ({ kind: e.kind, text: e.text })));
+    for (const f of folds) {
+      const open = this.openFolds.has(f.start);
+      const summary = document.createElement("button");
+      summary.className = "turn-summary";
+      summary.textContent = (open ? "▾ " : "▸ ") + f.summary;
+      summary.title = open ? "Hide steps" : "Show steps";
+      summary.onclick = () => { if (open) this.openFolds.delete(f.start); else this.openFolds.add(f.start); this.applyFolds(); };
+      this.transcript.insertBefore(summary, this.entries[f.start].el);
+      if (!open) for (let i = f.start; i <= f.end; i++) this.entries[i].el.style.display = "none";
+    }
   }
 
   // ---- transcript ---------------------------------------------------------
@@ -184,16 +299,16 @@ export class ChatPanel {
 
   setShowThinking(on: boolean) {
     this.showThinking = on;
-    for (const e of this.entries) e.el.style.display = (on || e.clean) ? "" : "none";
+    this.applyFolds();
   }
 
   isBusy() { return this.busy; }
 
   /** Render one row. `text` is kept verbatim so the row survives a save/restore
    *  round-trip; the HTML is derived from it per kind. */
-  private append(text: string, kind: Kind, clean: boolean, role?: string) {
+  private append(text: string, kind: Kind, clean: boolean, role?: string, live = true) {
     const el = document.createElement("div");
-    el.className = "msg " + (kind === "user" || kind === "assistant" ? "" : kind);
+    el.className = "msg " + kind;
     if (role) {
       const r = document.createElement("span");
       r.className = "role";
@@ -210,7 +325,7 @@ export class ChatPanel {
     el.style.display = (this.showThinking || clean) ? "" : "none";
     this.transcript.appendChild(el);
     this.entries.push({ el, clean, kind, text });
-    this.transcript.scrollTop = this.transcript.scrollHeight;
+    if (live) { this.emptyEl.hidden = true; this.scrollEl.scrollTop = this.scrollEl.scrollHeight; }
   }
 
   // ---- attachments --------------------------------------------------------
@@ -321,10 +436,11 @@ export class ChatPanel {
       return;
     }
     const cwd = this.getCwd();
-    if (!cwd) {
-      this.append("Open a folder first to chat with Claude about your project.", "note", true);
+    if (!cwd || !this.store) {
+      this.onOpenFolder();
       return;
     }
+    if (!this.doc) this.doc = this.store.create();
 
     // Gate before echoing the message — e.g. LingModel requires a LingCode
     // sign-in; this may open the sign-in flow. Abort silently if it fails/cancels.
@@ -357,6 +473,7 @@ export class ChatPanel {
     } finally {
       this.stopThinkingLine();
       this.setBusy(false);
+      this.applyFolds();
       await this.saveHistory();
       if (this.lastWrittenPath) this.onFileWritten(this.lastWrittenPath);
       this.drainPromptQueueIfIdle();
@@ -462,8 +579,9 @@ export class ChatPanel {
 
   private setBusy(b: boolean) {
     this.busy = b;
-    this.sendBtn.disabled = b;
-    this.sendBtn.textContent = b ? "…" : "Send";
+    this.sendBtn.textContent = b ? "Stop" : "Send";
+    this.sendBtn.classList.toggle("stop", b);
+    this.onBusyChange(b);
   }
 
   abort() {
@@ -481,7 +599,7 @@ export class ChatPanel {
       if (!this.thinkingLine) return;
       const s = Math.floor((Date.now() - this.thinkStart) / 1000);
       this.thinkingLine.textContent = `Claude is thinking… (${s}s)`;
-      this.transcript.scrollTop = this.transcript.scrollHeight;
+      this.scrollEl.scrollTop = this.scrollEl.scrollHeight;
     };
     tick();
     this.dotsTimer = window.setInterval(tick, 400);

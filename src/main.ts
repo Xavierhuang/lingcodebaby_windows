@@ -3,6 +3,10 @@ import { api } from "./api";
 import { FileTree } from "./tree";
 import { CodeEditor } from "./editor";
 import { ChatPanel } from "./chat";
+import { ChatStore, ConversationsPane } from "./conversations";
+import { PanelPane } from "./panel";
+import { showSettings } from "./settings";
+import { PANE, kindBadge, paneLayout } from "./simple-logic";
 import { runDeploy } from "./deploy";
 import { checkForUpdates } from "./updater";
 import { alertDialog, promptText, confirmDialog } from "./ui";
@@ -15,63 +19,68 @@ import { getCurrentWindow, UserAttentionType } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
+// The Simple workspace: 48px top bar over conversations | chat | panel.
+// Widths and behaviour follow the Mac app's SimpleWorkspaceView.
 const app = document.getElementById("app")!;
 app.innerHTML = `
-  <div class="toolbar">
-    <span class="title">LingCodeBaby</span>
-    <button class="tb deploy" disabled>Deploy</button>
+  <div class="topbar">
+    <div class="project">
+      <span class="project-name none">Open a project to start</span>
+      <span class="pill kind" hidden></span>
+    </div>
+    <span class="spacer"></span>
+    <button class="btn primary run" hidden title="Reload the preview">▶ Run app</button>
+    <button class="btn publish" hidden title="Put this project online">↑ Publish</button>
+    <button class="btn icon settings" title="Settings">⚙</button>
   </div>
   <div class="panes">
-    <div class="sidebar">
-      <div class="tree-header">Files</div>
-      <div class="tree"></div>
-    </div>
-    <div class="divider" data-target="sidebar"></div>
-    <div class="editor-pane">
-      <div class="cm-host"></div>
-    </div>
-    <div class="divider" data-target="chat"></div>
-    <div class="chat-pane">
-      <div class="chat-head">
-        Claude
-        <span class="spacer"></span>
-        <span class="model-label" title="Change in View → Claude Model"></span>
-      </div>
-      <div class="chat-body" style="flex:1;display:flex;flex-direction:column;min-height:0;"></div>
-    </div>
+    <div class="conversations"></div>
+    <div class="pane-divider conv-divider"></div>
+    <div class="chat"><button class="btn icon show-chats" hidden title="Show chats">⟩</button><div class="chat-body"></div></div>
+    <div class="pane-divider drag" data-target="panel"></div>
+    <div class="panel"></div>
   </div>`;
 
-const treeEl = app.querySelector(".tree") as HTMLElement;
-const cmHost = app.querySelector(".cm-host") as HTMLElement;
-const chatBody = app.querySelector(".chat-body") as HTMLElement;
-const deployBtn = app.querySelector(".deploy") as HTMLButtonElement;
-const titleEl = app.querySelector(".toolbar .title") as HTMLElement;
-const modelLabel = app.querySelector(".model-label") as HTMLElement;
+const el = <T extends HTMLElement>(sel: string) => app.querySelector(sel) as T;
+const projectName = el<HTMLElement>(".project-name");
+const kindPill = el<HTMLElement>(".pill.kind");
+const runBtn = el<HTMLButtonElement>(".btn.run");
+const publishBtn = el<HTMLButtonElement>(".btn.publish");
+const settingsBtn = el<HTMLButtonElement>(".btn.settings");
+const conversationsEl = el<HTMLElement>(".conversations");
+const convDivider = el<HTMLElement>(".conv-divider");
+const showChatsBtn = el<HTMLButtonElement>(".show-chats");
+const chatEl = el<HTMLElement>(".chat");
+const panelEl = el<HTMLElement>(".panel");
+const panelDivider = el<HTMLElement>(".pane-divider.drag");
 
-// Current Claude model — controlled from the View → Claude Model menu.
+// Current Claude model — the composer picker and View → Claude Model agree.
 let currentModel = "lingmodel";
 const MODEL_NAMES: Record<string, string> = {
   lingmodel: "LingModel", default: "Default", opus: "Opus", opus55: "Opus 5.5", sonnet: "Sonnet",
   fable51: "Fable 5.1", fable: "Fable", haiku: "Haiku",
   "deepseek-v4-pro": "DeepSeek V4 Pro", "deepseek-v4-flash": "DeepSeek V4 Flash",
 };
+
+const conversations = new ConversationsPane(conversationsEl);
+const chat = new ChatPanel(el(".chat-body"));
+const panel = new PanelPane(panelEl);
+const tree = new FileTree(panel.treeHost);
+const editor = new CodeEditor(panel.editorHost, isDark());
+
+chat.setModelOptions(MODEL_NAMES, currentModel);
 function setModel(m: string, persist = true) {
   currentModel = m;
-  modelLabel.textContent = MODEL_NAMES[m] || m;
+  chat.setCurrentModel(m);
   if (persist) persistPrefs();
 }
-setModel(currentModel, false); // show a default until prefs load
-
-const tree = new FileTree(treeEl);
-const editor = new CodeEditor(cmHost, isDark());
-const chat = new ChatPanel(chatBody);
+chat.onModelChange = (m) => setModel(m);
 
 // CodeMirror picks its palette in JS, so it can't follow the CSS token blocks —
 // push each change into it. Fires immediately with the current state, and again
 // whenever the menu or the OS flips.
 onAppearanceChange((dark) => editor.setDark(dark));
 
-// Current appearance — controlled from View → Appearance.
 let currentAppearance: Appearance = "system";
 function setAppearance(mode: Appearance, persist = true) {
   currentAppearance = mode;
@@ -82,46 +91,155 @@ function setAppearance(mode: Appearance, persist = true) {
 let currentFile: string | null = null;
 let dirty = false;
 let folder: string | null = null;
+let store: ChatStore | null = null;
+
+// ---- layout: pane widths + collapse, persisted in localStorage --------------
+const LS = { conv: "lingcodebaby.simple.conversationsCollapsed", panelW: "lingcodebaby.simple.panelWidth", panelC: "lingcodebaby.simple.panelCollapsed", steps: "lingcodebaby.simple.showAllSteps" };
+const lsGet = (k: string) => { try { return localStorage.getItem(k); } catch { return null; } };
+const lsSet = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* ignore */ } };
+let conversationsHidden = lsGet(LS.conv) === "1";
+let panelWidth = Math.max(PANE.previewMinimum, Number(lsGet(LS.panelW)) || PANE.preview);
+panel.setCollapsed(lsGet(LS.panelC) === "1");
+
+function applyLayout() {
+  const { conversations: convW, panel: panelW } = paneLayout(window.innerWidth, {
+    panelWidth, conversationsHidden, panelHidden: panel.isCollapsed(),
+  });
+  conversationsEl.classList.toggle("collapsed", convW === 0);
+  convDivider.hidden = convW === 0;
+  showChatsBtn.hidden = convW !== 0;
+  const stripOnly = panelW === PANE.previewCollapsed;
+  panelDivider.classList.toggle("drag", !stripOnly);
+  panelEl.style.width = panelW + "px";
+  chatEl.style.minWidth = PANE.chatMinimum + "px";
+}
+window.addEventListener("resize", applyLayout);
+conversations.onHide = () => { conversationsHidden = true; lsSet(LS.conv, "1"); applyLayout(); };
+showChatsBtn.onclick = () => { conversationsHidden = false; lsSet(LS.conv, "0"); applyLayout(); };
+panel.onCollapsedChange = (c) => { lsSet(LS.panelC, c ? "1" : "0"); applyLayout(); };
+panelDivider.addEventListener("mousedown", (e) => {
+  if (panel.isCollapsed()) return;
+  e.preventDefault();
+  const startX = e.clientX;
+  const startW = panelEl.getBoundingClientRect().width;
+  const move = (ev: MouseEvent) => {
+    const max = window.innerWidth - (conversationsHidden ? 0 : PANE.conversations + PANE.divider) - PANE.chatMinimum - PANE.dragBand;
+    panelWidth = Math.max(PANE.previewMinimum, Math.min(max, startW - (ev.clientX - startX)));
+    applyLayout();
+  };
+  const up = () => { document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up); lsSet(LS.panelW, String(Math.round(panelWidth))); };
+  document.addEventListener("mousemove", move);
+  document.addEventListener("mouseup", up);
+});
+chat.setShowAllSteps(lsGet(LS.steps) === "1");
 
 // ---- wiring ----
 chat.getCwd = () => folder;
 chat.getModel = () => currentModel;
-// (LingModel sign-in is now handled by the first-run onboarding gate in
-// onboarding.ts — no per-send auth check needed here. The dead `chat.ensureAuth`
-// assignment that used to live here was write-only; nothing in ChatPanel read it.)
 chat.onFilesModified = async () => {
   await tree.refreshAll();
   if (currentFile) await reloadCurrentFromDisk();
+  panel.setReview(chat.editedFiles());
+  panel.reloadPreview();
 };
-// The agent wrote a file — surface it in the editor, like the Mac
+// The agent wrote a file — show it in the Files tab's editor, like the Mac
 // ClaudeChatDelegate claudeChat:didWriteFileAtPath: hook does.
 chat.onFileWritten = async (path) => {
-  if (path && path !== currentFile) await openFile(path);
+  if (path && path !== currentFile) await openFile(path, false);
 };
-// Claude asked something while the window may be in the background — flash the
-// taskbar button. The Mac app badges the dock and clears it on reactivate; the
-// Windows equivalent stops flashing as soon as the window is focused.
 chat.onAskUser = async () => {
   try {
     const win = getCurrentWindow();
     if (!(await win.isFocused())) await win.requestUserAttention(UserAttentionType.Informational);
   } catch { /* not fatal — the chime already fired */ }
 };
+chat.onRunApp = () => runApp();
+chat.onPublish = () => runDeploy(folder);
+chat.onOpenFolder = () => doOpenFolder();
+chat.onChatSaved = () => refreshConversations();
+chat.onBusyChange = (busy) => {
+  conversations.setRunning(busy ? chat.currentChatId() : null);
+  runBtn.disabled = busy;
+  runBtn.title = busy ? "Wait for the current reply to finish — the app is being changed right now." : "Reload the preview";
+};
 
-tree.onOpenFile = (path) => openFile(path);
+conversations.onNew = () => newChat();
+conversations.onSelect = (id) => selectChat(id);
+conversations.onDelete = (id) => deleteChat(id);
+conversations.onSwitchProject = () => doOpenFolder();
 
-editor.onChange = () => { if (!dirty) { dirty = true; updateTitle(); } };
+tree.onOpenFile = (path) => openFile(path, true);
+editor.onChange = () => { if (!dirty) { dirty = true; updateFileHead(); } };
 
-deployBtn.onclick = () => runDeploy(folder);
+runBtn.onclick = () => runApp();
+publishBtn.onclick = () => runDeploy(folder);
+settingsBtn.onclick = () => showSettings(
+  { appearance: currentAppearance, playSounds: chat.playSounds, showAllSteps: chat.getShowAllSteps() },
+  {
+    onAppearance: (a) => setAppearance(a),
+    onSounds: (on) => { chat.playSounds = on; persistPrefs(); },
+    onShowAllSteps: (on) => { chat.setShowAllSteps(on); lsSet(LS.steps, on ? "1" : "0"); },
+    anthropicKey: doConfigureAnthropicKey,
+    deepseekKey: doConfigureDeepSeekKey,
+    customEndpoint: showEndpointSheet,
+    signOut: doSignOut,
+    checkUpdates: () => checkForUpdates(false),
+    welcome: () => showOnboarding(false),
+  },
+);
 
-async function openFile(path: string) {
+function runApp() {
+  if (!folder) { doOpenFolder(); return; }
+  panel.setCollapsed(false);
+  panel.select("preview");
+  panel.reloadPreview();
+}
+
+// ---- chats -----------------------------------------------------------------
+async function refreshConversations() {
+  if (!store) { conversations.setChats([], null); return; }
+  conversations.setChats(await store.list(), chat.currentChatId());
+}
+
+async function newChat() {
+  if (!store) { doOpenFolder(); return; }
+  chat.openChat(store.create());
+  await refreshConversations();
+}
+
+async function selectChat(id: string) {
+  if (!store) return;
+  const doc = await store.load(id);
+  if (doc) { chat.openChat(doc); panel.setReview(chat.editedFiles()); }
+  await refreshConversations();
+}
+
+async function deleteChat(id: string) {
+  if (!store) return;
+  const ok = await confirmDialog("Delete this chat?\n\nIts transcript is moved to the Recycle Bin. Claude forgets the context. It can't be undone from here.", "Delete");
+  if (!ok) return;
+  await store.remove(id);
+  if (chat.currentChatId() === id) await openLatestOrNew();
+  else await refreshConversations();
+}
+
+async function openLatestOrNew() {
+  if (!store) return;
+  const metas = await store.list();
+  if (metas.length) await selectChat(metas[0].id);
+  else await newChat();
+}
+
+// ---- files -----------------------------------------------------------------
+async function openFile(path: string, focus: boolean) {
   try {
     const text = await api.readFile(path);
     currentFile = path;
     dirty = false;
     editor.setContent(text, path);
-    editor.focus();
-    updateTitle();
+    panel.select("files");
+    if (focus) editor.focus();
+    updateFileHead();
   } catch (e) {
     await alertDialog("Couldn't open file: " + String(e));
   }
@@ -134,7 +252,7 @@ async function reloadCurrentFromDisk() {
     if (text !== editor.getContent()) {
       editor.setContent(text, currentFile);
       dirty = false;
-      updateTitle();
+      updateFileHead();
     }
   } catch { /* file may have been deleted */ }
 }
@@ -148,7 +266,8 @@ async function saveFile() {
   try {
     await api.writeFile(currentFile, editor.getContent());
     dirty = false;
-    updateTitle();
+    updateFileHead();
+    panel.reloadPreview();
   } catch (e) {
     await alertDialog("Couldn't save: " + String(e));
   }
@@ -156,24 +275,34 @@ async function saveFile() {
 
 async function doOpenFile() {
   const path = await open({ directory: false, multiple: false });
-  if (path && typeof path === "string") await openFile(path);
+  if (path && typeof path === "string") await openFile(path, true);
 }
 
 async function doOpenFolder() {
   const path = await open({ directory: true, multiple: false });
-  if (path && typeof path === "string") {
-    await loadFolder(path);
-  }
+  if (path && typeof path === "string") await loadFolder(path);
 }
 
 async function loadFolder(path: string) {
   folder = path;
+  store = new ChatStore(path);
+  currentFile = null;
+  dirty = false;
   await tree.setRoot(path);
-  deployBtn.disabled = false;
+  conversations.setProject(baseName(path));
+  projectName.textContent = baseName(path);
+  projectName.classList.remove("none");
+  runBtn.hidden = false;
+  publishBtn.hidden = false;
+  let hasIndex = false;
+  try { hasIndex = await api.deployHasIndex(path); } catch { hasIndex = false; }
+  kindPill.textContent = kindBadge(hasIndex);
+  kindPill.hidden = false;
+  panel.setPreview(hasIndex ? `${path.replace(/[\\/]+$/, "")}/index.html` : null);
+  chat.setStore(path, store);
+  updateFileHead();
   updateTitle();
-  // Restore this folder's saved conversation (transcript + CLI session), or
-  // show the folder greeting when there's nothing saved.
-  await chat.setRoot(path);
+  await openLatestOrNew();
   // Wire the LingCode Cloud backend for signed-in users and say so once — the
   // feature is otherwise silent, and "connected" is easy to mistake for
   // "provisioned". Mirrors the Mac note in scaffoldCloudBackend:.
@@ -224,21 +353,23 @@ function baseName(p: string): string {
   return p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
 }
 
+function updateFileHead() {
+  panel.fileHead.textContent = currentFile ? (dirty ? "• " : "") + baseName(currentFile) : "No file open";
+  panel.fileHead.classList.toggle("faint", !currentFile);
+  updateTitle();
+}
+
 function updateTitle() {
-  let name = "Untitled";
-  if (currentFile) name = baseName(currentFile);
-  else if (folder) name = baseName(folder);
-  const t = (dirty ? "• " : "") + name + " — LingCodeBaby";
-  titleEl.textContent = name + (dirty ? " •" : "");
+  const name = folder ? baseName(folder) : "LingCodeBaby";
+  const t = (dirty ? "• " : "") + name + (folder ? " — LingCodeBaby" : "");
   document.title = t;
   getCurrentWindow().setTitle(t).catch(() => {});
 }
 
 async function persistPrefs() {
-  // Fetch-merge-set: the Prefs shape now carries endpoint + onboarding fields
-  // owned by other subsystems. Sending just {model, play_sounds} would clobber
-  // them back to Rust defaults (they carry `#[serde(default)]` on the Rust
-  // side). Read current first, apply just the fields we own, write back.
+  // Fetch-merge-set: the Prefs shape carries endpoint + onboarding fields owned
+  // by other subsystems. Sending just {model, play_sounds} would clobber them
+  // back to Rust defaults. Read current first, apply just the fields we own.
   try {
     const current = await api.getPrefs();
     await api.setPrefs({
@@ -268,19 +399,17 @@ async function doConfigureAnthropicKey() {
       await api.anthropicKeySave(value);
       await alertDialog("Anthropic API key saved to the OS Keychain.");
     }
-    // Empty input + no explicit 'delete' = no change (matches the prompt).
   } catch (e) {
     await alertDialog("Could not save the key: " + String(e));
   }
 }
 
-// Same shape for the DeepSeek key, used by the DeepSeek rows in View → Claude
-// Model. Mirrors Mac's setDeepSeekAPIKey: sheet (AppDelegate.m).
+// Same shape for the DeepSeek key, used by the DeepSeek rows of the model picker.
 async function doConfigureDeepSeekKey() {
   const present = await api.deepseekKeyPresent();
   const prompt = present
-    ? "DeepSeek API key (currently stored — leave empty to keep, or type a new one to replace; type 'delete' to clear). Used by the DeepSeek rows in View → Claude Model."
-    : "Paste your DeepSeek API key from platform.deepseek.com. Used by the DeepSeek rows in View → Claude Model; stored in the OS Keychain, never on disk:";
+    ? "DeepSeek API key (currently stored — leave empty to keep, or type a new one to replace; type 'delete' to clear). Used by the DeepSeek models."
+    : "Paste your DeepSeek API key from platform.deepseek.com. Used by the DeepSeek models; stored in the OS Keychain, never on disk:";
   const value = await promptText(prompt, "");
   if (value === null) return;
   try {
@@ -294,18 +423,6 @@ async function doConfigureDeepSeekKey() {
   } catch (e) {
     await alertDialog("Could not save the DeepSeek API key: " + String(e));
   }
-}
-
-// View ▸ New Conversation — clear the chat + saved history for this folder
-// (with a confirm, since it can't be undone). Mirrors Mac newConversation:.
-async function doNewConversation() {
-  const ok = await confirmDialog(
-    "Start a new conversation?\n\n" +
-    "This clears the current chat and its saved history for this folder, and " +
-    "Claude forgets the prior context. It can't be undone.",
-    "Clear",
-  );
-  if (ok) await chat.clearConversation();
 }
 
 // Sign out of the LingCode account (LingModel + Cloud deploy share the token).
@@ -333,43 +450,17 @@ async function doSignOut() {
   }
 }
 
-// ---- splitters ----
-function setupDivider(divider: HTMLElement) {
-  const target = divider.dataset.target!;
-  const pane = app.querySelector(target === "sidebar" ? ".sidebar" : ".chat-pane") as HTMLElement;
-  divider.addEventListener("mousedown", (e) => {
-    e.preventDefault();
-    const startX = e.clientX;
-    const startW = pane.getBoundingClientRect().width;
-    const move = (ev: MouseEvent) => {
-      const delta = ev.clientX - startX;
-      const w = target === "sidebar" ? startW + delta : startW - delta;
-      pane.style.width = Math.max(150, Math.min(700, w)) + "px";
-    };
-    const up = () => { document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up); };
-    document.addEventListener("mousemove", move);
-    document.addEventListener("mouseup", up);
-  });
-}
-app.querySelectorAll<HTMLElement>(".divider").forEach(setupDivider);
-
 // ---- keyboard (in-webview, complements native menu accelerators) ----
 window.addEventListener("keydown", (e) => {
   const mod = e.ctrlKey || e.metaKey;
   if (mod && e.key.toLowerCase() === "s") { e.preventDefault(); saveFile(); }
 });
 
-// ---- native menu events ----
+// ---- native menu events (the menus still exist; the UI just has homes too) ----
 listen<string>("menu", async (ev) => {
   const id = ev.payload;
-  if (id.startsWith("model:")) {
-    setModel(id.slice("model:".length));
-    return;
-  }
-  if (id.startsWith("appearance:")) {
-    setAppearance(id.slice("appearance:".length) as Appearance);
-    return;
-  }
+  if (id.startsWith("model:")) { setModel(id.slice("model:".length)); return; }
+  if (id.startsWith("appearance:")) { setAppearance(id.slice("appearance:".length) as Appearance); return; }
   switch (id) {
     case "open_file": await doOpenFile(); break;
     case "open_folder": await doOpenFolder(); break;
@@ -380,12 +471,12 @@ listen<string>("menu", async (ev) => {
     case "anthropic_key": await doConfigureAnthropicKey(); break;
     case "deepseek_key": await doConfigureDeepSeekKey(); break;
     case "welcome": await showOnboarding(false); break;
-    case "find": editor.openFind(); break;
+    case "find": panel.select("files"); editor.openFind(); break;
     case "find_next": editor.findNext(); break;
     case "find_prev": editor.findPrev(); break;
     case "check_updates": await checkForUpdates(false); break;
     case "stop_claude": chat.abort(); break;
-    case "new_conversation": await doNewConversation(); break;
+    case "new_conversation": await newChat(); break;
     case "sign_out": await doSignOut(); break;
     case "connect_backend": await connectBackendToFolder(folder); break;
     case "backend_console": await openBackendConsole(); break;
@@ -395,9 +486,11 @@ listen<string>("menu", async (ev) => {
     case "sounds:on": chat.playSounds = true; persistPrefs(); break;
     case "sounds:off": chat.playSounds = false; persistPrefs(); break;
   }
-});
+}).catch(() => { /* outside Tauri (dev preview) there are no menus */ });
 
-// ---- init prefs ----
+// ---- init ----
+applyLayout();
+conversations.setProject(null);
 (async () => {
   try {
     const prefs = await api.getPrefs();
@@ -406,12 +499,17 @@ listen<string>("menu", async (ev) => {
     setAppearance((prefs.appearance || "system") as Appearance, false);
   } catch { /* defaults are fine */ }
   updateTitle();
-
   // First-run onboarding gate — hard gate if nothing is configured yet.
-  // Mirrors Mac LCBOnboarding showGate: (blocks the app on cold launch until
-  // an auth path is chosen; no-op once the user completes it once).
   try { await showOnboardingIfNeeded(); } catch { /* non-fatal */ }
-
   // Quietly check for updates a few seconds after launch.
   setTimeout(() => checkForUpdates(true), 4000);
+  // Dev preview only (VITE_MOCK_TAURI=1): ?folder=<path>&appearance=dark opens
+  // the mock project and forces a theme so a headless screenshot has content.
+  if (import.meta.env.DEV) {
+    const q = new URLSearchParams(location.search);
+    const a = q.get("appearance");
+    if (a === "light" || a === "dark") setAppearance(a, false);
+    const f = q.get("folder");
+    if (f) await loadFolder(f);
+  }
 })();

@@ -7,8 +7,19 @@ import { fileURLToPath } from "url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // Tauri serves the frontend; keep things predictable for the webview.
+// VITE_MOCK_TAURI=1 swaps every Tauri package for src/dev/tauri-mock.ts so the
+// UI can be opened in a plain browser and screenshotted. Dev only; a normal
+// `npm run build` never sees the alias.
+const mock = process.env.VITE_MOCK_TAURI === "1" ? resolve(__dirname, "src/dev/tauri-mock.ts") : null;
+const mockAliases = mock
+  ? ["@tauri-apps/api/core", "@tauri-apps/api/event", "@tauri-apps/api/window", "@tauri-apps/plugin-dialog",
+     "@tauri-apps/plugin-opener", "@tauri-apps/plugin-updater", "@tauri-apps/plugin-process"]
+      .map((find) => ({ find, replacement: mock }))
+  : [];
+
 export default defineConfig({
   clearScreen: false,
+  resolve: { alias: mockAliases },
   server: {
     port: 1420,
     strictPort: true,
