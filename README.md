@@ -6,15 +6,20 @@ from one codebase.
 
 ## What it is
 
-A minimal IDE with three panes:
+A chat-first workspace, laid out like the Mac app's Simple mode:
 
-- **File tree** (left) — lazy directory browser with new/rename/delete-to-trash,
-  context menu, and reveal-in-file-manager.
-- **Code editor** (center) — [CodeMirror 6](https://codemirror.net/) with syntax
-  highlighting (Xcode-Light palette), find (Ctrl/Cmd+F), undo/redo, 4-space tabs.
-- **Claude chat** (right) — drives the `claude` CLI as a subprocess, streams its
-  JSON output, renders thinking/tool steps/file diffs, and shows clickable option
-  chips for multiple-choice questions. Model picker + sounds.
+- **Chats** (left, 240 px) — every conversation for the open folder, grouped by
+  day, with search. Stored as `<folder>/.lingcode/chats/<id>.json`.
+- **Chat** (centre) — drives the `claude` CLI as a subprocess. Each finished
+  turn folds its commands and edits behind one line ("Edited 2 files · Ran 1
+  command"); *Show all steps* expands them. The composer has the model picker
+  (Best quality / Fast / Cheap, plus LingModel) and Stop in place of Send.
+- **Panel** (right, 400 px, collapsible) — **Preview** of the folder's
+  `index.html`, **Files** (tree + [CodeMirror 6](https://codemirror.net/)
+  editor, find with Ctrl/Cmd+F), and **Review** (every file the agent edited
+  in this chat, with diffs).
+- **Top bar** — project name, *Run app* (reloads the preview), *Publish*
+  (deploy to LingCode Cloud), and Settings.
 
 Plus **Deploy to LingCode Cloud** — tars the open folder and ships it to the
 LingCode Cloudflare Workers API.

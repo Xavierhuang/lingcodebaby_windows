@@ -88,15 +88,17 @@
   <div class="callout">Endpoint priority (highest wins): Custom endpoint → DeepSeek row → LingModel → Personal key → Claude subscription. Change the picker in <strong>View → Claude Model</strong> to steer between them. Fable 5.1 needs Claude Code 2.1.251 or newer and Opus 5.5 needs 2.1.280 or newer on your machine; run <code>claude update</code> if the app says the CLI is too old.</div>
 
   <h2>Working on a project</h2>
+  <p>The window is laid out like the Mac app's Simple mode: your chats on the left, the conversation in the middle, and a panel on the right with <strong>Preview</strong>, <strong>Files</strong> and <strong>Review</strong> tabs. The top bar shows the project, <strong>Run app</strong> (reloads the preview of your <code>index.html</code>), <strong>Publish</strong> and Settings.</p>
   <ul>
-    <li><strong>Open a folder:</strong> <code>Ctrl+Shift+O</code> (macOS: <code>⌘⇧O</code>).</li>
+    <li><strong>Open a folder:</strong> <code>Ctrl+Shift+O</code> (macOS: <code>⌘⇧O</code>), or the project row above the chat list.</li>
+    <li><strong>New chat:</strong> the button at the top of the chat list, or <code>Ctrl+Shift+K</code>. Chats are saved per folder.</li>
+    <li><strong>Files:</strong> the Files tab has the tree and an editor. <strong>Save:</strong> <code>Ctrl+S</code>. <strong>Find:</strong> <code>Ctrl+F</code>; next/previous with <code>Ctrl+G</code> / <code>Ctrl+Shift+G</code>.</li>
+    <li><strong>Hide a pane:</strong> the ⟨ button hides the chat list, ⟩ collapses the panel to a strip. Drag the panel's edge to resize it.</li>
     <li><strong>New window:</strong> <code>Ctrl+N</code>.</li>
-    <li><strong>Save:</strong> <code>Ctrl+S</code>.</li>
-    <li><strong>Find in file:</strong> <code>Ctrl+F</code>; next/previous with <code>Ctrl+G</code> / <code>Ctrl+Shift+G</code>.</li>
   </ul>
 
   <h2>Chat with Claude</h2>
-  <p>The right pane is a live chat that drives the <code>claude</code> CLI as a subprocess. It shows thinking blocks, tool calls, and per-file edits inline. Stop a runaway turn with <code>Ctrl+.</code>.</p>
+  <p>The conversation drives the <code>claude</code> CLI as a subprocess. Each finished turn folds its commands and edits behind one line such as <em>Edited 2 files · Ran 1 command</em>; click it, or turn on <em>Show all steps</em> under the composer, to see them. The Review tab lists every file the agent changed in this chat with its diff. Stop a turn with the Stop button or <code>Ctrl+.</code>.</p>
   <p>When Claude needs a decision it can ask a multiple-choice question — the app renders each option as a clickable chip.</p>
 
   <h2>Quinny (specification language)</h2>
