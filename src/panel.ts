@@ -13,6 +13,8 @@ export interface ReviewItem { file: string; diff: string; }
 
 export class PanelPane {
   onCollapsedChange: (collapsed: boolean) => void = () => {};
+  /** The empty preview's Run app button; main.ts decides what running means. */
+  onRunApp: () => void = () => {};
   /** Hosts main.ts mounts the file tree and the editor into. */
   readonly treeHost: HTMLElement;
   readonly editorHost: HTMLElement;
@@ -29,6 +31,7 @@ export class PanelPane {
   private selected: TabKind = "preview";
   private collapsed = false;
   private previewUrl: string | null = null;
+  hasFolder = false;
 
   constructor(root: HTMLElement) {
     this.root = root;
@@ -39,9 +42,11 @@ export class PanelPane {
       </div>
       <div class="panel-body">
         <div class="tab-pane" data-tab="preview">
-          <div class="address"><button class="btn sm reload" title="Reload">↻</button><span class="url"></span></div>
-          <iframe class="preview-frame" title="Preview" sandbox="allow-scripts allow-forms allow-same-origin"></iframe>
-          <div class="panel-empty preview-empty" hidden><b>No preview for this project</b><span>Add an index.html and press Run app.</span></div>
+          <div class="browser-frame">
+            <div class="address"><span class="lights"><i></i><i></i><i></i></span><button class="btn sm reload" title="Reload">↻</button><span class="url">Your app isn't running</span></div>
+            <iframe class="preview-frame" title="Preview" sandbox="allow-scripts allow-forms allow-same-origin"></iframe>
+            <div class="panel-empty preview-empty" hidden><span class="globe">🌐</span><b>Your app isn't running</b><span class="sub">Takes a moment to load</span><button class="btn primary run-preview">▶ Run app</button></div>
+          </div>
         </div>
         <div class="tab-pane" data-tab="files">
           <div class="files-split">
@@ -70,6 +75,7 @@ export class PanelPane {
     this.fileHead = root.querySelector(".file-name") as HTMLElement;
     (root.querySelector(".btn.collapse") as HTMLButtonElement).onclick = () => this.setCollapsed(true);
     (root.querySelector(".btn.reload") as HTMLButtonElement).onclick = () => this.reloadPreview();
+    (root.querySelector(".run-preview") as HTMLButtonElement).onclick = () => this.onRunApp();
     this.renderStrip();
     this.select(this.selected);
     this.setPreview(null);
@@ -94,9 +100,13 @@ export class PanelPane {
   /** Point the Preview tab at the folder's index.html (or the empty state). */
   setPreview(indexPath: string | null) {
     this.previewUrl = indexPath ? convertFileSrc(indexPath) : null;
-    this.urlEl.textContent = indexPath || "";
+    this.urlEl.textContent = indexPath ? indexPath.split(/[\\/]/).slice(-2).join("/") : "Your app isn't running";
     this.frame.hidden = !indexPath;
     this.previewEmpty.hidden = !!indexPath;
+    const sub = this.previewEmpty.querySelector(".sub") as HTMLElement;
+    const run = this.previewEmpty.querySelector(".run-preview") as HTMLButtonElement;
+    sub.textContent = this.hasFolder ? "No index.html in this folder yet — ask for one, then press Run app." : "Open a project, then press Run app.";
+    run.hidden = !this.hasFolder;
     if (indexPath) this.reloadPreview(); else this.frame.removeAttribute("src");
   }
 

@@ -154,6 +154,7 @@ chat.onAskUser = async () => {
   } catch { /* not fatal — the chime already fired */ }
 };
 chat.onRunApp = () => runApp();
+panel.onRunApp = () => runApp();
 chat.onPublish = () => runDeploy(folder);
 chat.onOpenFolder = () => doOpenFolder();
 chat.onChatSaved = () => refreshConversations();
@@ -298,6 +299,7 @@ async function loadFolder(path: string) {
   try { hasIndex = await api.deployHasIndex(path); } catch { hasIndex = false; }
   kindPill.textContent = kindBadge(hasIndex);
   kindPill.hidden = false;
+  panel.hasFolder = true;
   panel.setPreview(hasIndex ? `${path.replace(/[\\/]+$/, "")}/index.html` : null);
   chat.setStore(path, store);
   updateFileHead();

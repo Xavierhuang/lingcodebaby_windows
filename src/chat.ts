@@ -86,8 +86,8 @@ export class ChatPanel {
       <div class="composer-wrap"><div class="composer-inner">
         <div class="composer">
           <div class="attachments"></div>
-          <textarea class="chat-input" placeholder="What should we work on?" rows="1"></textarea>
-          <div class="composer-row"><span class="spacer"></span><button class="send-btn">Send</button></div>
+          <textarea class="chat-input" placeholder="Plan, search, build anything" rows="1"></textarea>
+          <div class="composer-row"><span class="spacer"></span><button class="send-btn" title="Send">↑</button></div>
         </div>
         <div class="composer-actions">
           <select class="model-select" title="Model"></select>
@@ -258,7 +258,7 @@ export class ChatPanel {
       <div class="empty-grid">
         <button class="empty-chip" data-chip="run"><b>Run the app</b><span>Open the preview</span></button>
         <button class="empty-chip" data-chip="change"><b>Change something I see</b><span>Describe what to change</span></button>
-        <button class="empty-chip" data-chip="publish"><b>Publish</b><span>Put it online</span></button>
+        <button class="empty-chip" data-chip="publish"><b>Ship next version</b><span>Put it online with LingCode Cloud</span></button>
         <button class="empty-chip" data-chip="explain"><b>Explain my app</b><span>Plain-English tour of what it does</span></button>
       </div>`;
     this.emptyEl.querySelectorAll<HTMLButtonElement>("[data-chip]").forEach((b) => {
@@ -579,7 +579,8 @@ export class ChatPanel {
 
   private setBusy(b: boolean) {
     this.busy = b;
-    this.sendBtn.textContent = b ? "Stop" : "Send";
+    this.sendBtn.textContent = b ? "■" : "↑";
+    this.sendBtn.title = b ? "Stop" : "Send";
     this.sendBtn.classList.toggle("stop", b);
     this.onBusyChange(b);
   }

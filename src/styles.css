@@ -191,7 +191,11 @@ input.field:focus, textarea.field:focus, select.field:focus { outline: none; bor
 .opt:hover { border-color: var(--border-strong); }
 
 /* empty state (SimpleEmptyStateView) */
-.empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 50vh; text-align: center; }
+.empty-state { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 50vh; text-align: center; }
+.empty-state::before {
+  content: ""; position: absolute; inset: -40px -80px 0; z-index: -1; pointer-events: none;
+  background: radial-gradient(ellipse at 50% 30%, color-mix(in srgb, var(--primary) 12%, transparent), transparent 60%);
+}
 .empty-state h1 { font-size: 22px; font-weight: 700; margin: 0 0 6px; letter-spacing: -0.01em; }
 .empty-state .status { color: var(--text-2); font-size: 13px; margin-bottom: 20px; }
 .empty-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; max-width: 560px; width: 100%; }
@@ -218,8 +222,8 @@ input.field:focus, textarea.field:focus, select.field:focus { outline: none; bor
   border: none; background: transparent; color: var(--text); user-select: text; padding: 4px 4px 0; outline: none;
 }
 .composer-row { display: flex; align-items: center; gap: 8px; }
-.send-btn { min-height: 32px; padding: 0 14px; border-radius: var(--radius-button); border: none; background: var(--primary); color: #fff; font-weight: 600; cursor: pointer; }
-.send-btn.stop { background: var(--raised); color: var(--text); border: 1px solid var(--border-strong); }
+.send-btn { width: 32px; height: 32px; padding: 0; border-radius: 50%; border: none; background: var(--primary); color: #fff; font-weight: 700; font-size: 15px; line-height: 1; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+.send-btn.stop { background: var(--raised); color: var(--text); border: 1px solid var(--border-strong); font-size: 11px; }
 .send-btn:disabled { opacity: 0.55; cursor: default; }
 .composer-actions { display: flex; align-items: center; gap: 8px; padding: 8px 2px 0; }
 .model-select { min-height: 28px; padding: 0 8px; font-size: 12px; border-radius: var(--radius-button); border: 1px solid var(--border); background: var(--raised); color: var(--text); }
@@ -252,9 +256,15 @@ input.field:focus, textarea.field:focus, select.field:focus { outline: none; bor
 .panel.collapsed .panel-body { display: none; }
 .tab-pane { position: absolute; inset: 0; display: none; flex-direction: column; }
 .tab-pane.active { display: flex; }
-.address { display: flex; gap: 6px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 12px; color: var(--text-2); }
+.browser-frame { flex: 1; min-height: 0; display: flex; flex-direction: column; margin: 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-card); overflow: hidden; background: var(--canvas); }
+.address { display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 12px; color: var(--text-2); }
+.lights { display: inline-flex; gap: 4px; }
+.lights i { width: 8px; height: 8px; border-radius: 50%; background: var(--border-strong); }
+.panel-empty .globe { font-size: 40px; filter: grayscale(1); opacity: 0.6; margin-bottom: 8px; }
+.panel-empty .sub { color: var(--text-2); margin-bottom: 12px; }
 .address .url { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: Menlo, Consolas, monospace; font-size: 11px; }
 .preview-frame { flex: 1; border: none; background: #fff; }
+.tab-pane[data-tab="review"] .address { border-radius: 0; }
 .panel-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; color: var(--text-2); padding: 24px; gap: 6px; }
 .files-split { display: flex; flex-direction: column; height: 100%; }
 .files-tree { height: 38%; min-height: 120px; overflow: auto; border-bottom: 1px solid var(--border); padding: 4px 0; }
