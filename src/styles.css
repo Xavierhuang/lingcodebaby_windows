@@ -182,7 +182,26 @@ input.field:focus, textarea.field:focus, select.field:focus { outline: none; bor
   color: var(--text-2); font-size: 12px; cursor: pointer;
 }
 .turn-summary:hover { border-color: var(--border-strong); }
-.thinking-line { color: var(--text-3); font-style: italic; font-size: 12px; margin-bottom: 8px; }
+.thinking-line { color: var(--text-3); font-style: italic; font-size: 12px; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+/* Mac CGEllipsisView: three 6px accent dots, one more lit every 0.32s (1 → 2 → 3). */
+.thinking-dots { display: inline-flex; gap: 6px; }
+.thinking-dots span { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); opacity: 0.38; animation: lcb-dot 0.96s steps(1, end) infinite; }
+.thinking-dots span:nth-child(2) { animation-name: lcb-dot-2; }
+.thinking-dots span:nth-child(3) { animation-name: lcb-dot-3; }
+@keyframes lcb-dot   { 0%, 100% { opacity: 1; } }
+@keyframes lcb-dot-2 { 0% { opacity: 0.38; } 33.33%, 100% { opacity: 1; } }
+@keyframes lcb-dot-3 { 0% { opacity: 0.38; } 66.67%, 100% { opacity: 1; } }
+/* Mac LCBTheme popInView: new rows spring in from 0.92 while fading up. */
+.msg.pop { animation: lcb-pop 0.28s cubic-bezier(0.34, 1.4, 0.64, 1) both; transform-origin: left top; }
+.msg.user.pop { transform-origin: right top; }
+@keyframes lcb-pop { from { opacity: 0; transform: scale(0.92); } to { opacity: 1; transform: none; } }
+/* Mac LCBTheme bounceView: squash-and-settle on each send/stop tap. */
+.send-btn.bounce { animation: lcb-bounce 0.3s ease-out; }
+@keyframes lcb-bounce { 0% { transform: scale(1); } 35% { transform: scale(0.86); } 70% { transform: scale(1.06); } 100% { transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) {
+  .msg.pop, .send-btn.bounce { animation: none; }
+  .thinking-dots span { animation: none; opacity: 1; }
+}
 .options { display: flex; flex-direction: column; gap: 6px; padding: 4px 0 10px; }
 .opt {
   text-align: left; background: var(--raised); border: 1px solid var(--border); border-radius: var(--radius-button);

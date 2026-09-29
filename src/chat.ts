@@ -107,7 +107,14 @@ export class ChatPanel {
     this.stepsToggle.onchange = () => this.setShowAllSteps(this.stepsToggle.checked);
 
     // Stop takes Send's place while a turn runs (the Mac's stopInComposer).
-    this.sendBtn.onclick = () => { if (this.busy) this.abort(); else this.send(); };
+    this.sendBtn.onclick = () => {
+      // Restart the bounce so back-to-back taps each replay it.
+      this.sendBtn.classList.remove("bounce");
+      void this.sendBtn.offsetWidth;
+      this.sendBtn.classList.add("bounce");
+      if (this.busy) this.abort(); else this.send();
+    };
+    this.sendBtn.addEventListener("animationend", () => this.sendBtn.classList.remove("bounce"));
     this.input.onkeydown = (e) => {
       if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); this.send(); }
       // Escape clears a pending attachment first (Mac escapeHandler), and only
@@ -325,7 +332,15 @@ export class ChatPanel {
     el.style.display = (this.showThinking || clean) ? "" : "none";
     this.transcript.appendChild(el);
     this.entries.push({ el, clean, kind, text });
-    if (live) { this.emptyEl.hidden = true; this.scrollEl.scrollTop = this.scrollEl.scrollHeight; }
+    if (live) {
+      // Only live, visible rows pop in; a restored history appears at rest.
+      if (el.style.display !== "none") {
+        el.classList.add("pop");
+        el.addEventListener("animationend", () => el.classList.remove("pop"), { once: true });
+      }
+      this.emptyEl.hidden = true;
+      this.scrollEl.scrollTop = this.scrollEl.scrollHeight;
+    }
   }
 
   // ---- attachments --------------------------------------------------------
@@ -595,11 +610,16 @@ export class ChatPanel {
     this.thinkStart = Date.now();
     this.thinkingLine = document.createElement("div");
     this.thinkingLine.className = "thinking-line";
+    const dots = document.createElement("span");
+    dots.className = "thinking-dots";
+    for (let i = 0; i < 3; i++) dots.appendChild(document.createElement("span"));
+    const label = document.createElement("span");
+    this.thinkingLine.append(dots, label);
     this.transcript.appendChild(this.thinkingLine);
     const tick = () => {
       if (!this.thinkingLine) return;
       const s = Math.floor((Date.now() - this.thinkStart) / 1000);
-      this.thinkingLine.textContent = `Claude is thinking… (${s}s)`;
+      label.textContent = s > 0 ? `Thinking… ${s}s` : "Thinking…";
       this.scrollEl.scrollTop = this.scrollEl.scrollHeight;
     };
     tick();
