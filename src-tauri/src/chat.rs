@@ -377,6 +377,39 @@ fn cli_too_old_hint(model: &str, stderr: &str, bundled: bool) -> Option<&'static
     })
 }
 
+/// Whether the CLI at `bin` accepts `--include-partial-messages`, read from its
+/// `--help` once per path per launch. A CLI that can't be asked (timeout,
+/// spawn error) is treated as not supporting it: the turn then runs without
+/// streaming rather than failing on an unknown option.
+async fn supports_partial_messages(bin: &std::path::Path) -> bool {
+    use std::collections::HashMap;
+    use std::sync::OnceLock;
+    static CACHE: OnceLock<std::sync::Mutex<HashMap<PathBuf, bool>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(&known) = cache.lock().unwrap().get(bin) {
+        return known;
+    }
+    let mut std_cmd = std::process::Command::new(bin);
+    std_cmd.arg("--help").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        std_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    let mut cmd = tokio::process::Command::from(std_cmd);
+    cmd.kill_on_drop(true);
+    let supported = match tokio::time::timeout(std::time::Duration::from_secs(15), cmd.output()).await {
+        Ok(Ok(out)) => help_lists_partial_messages(&String::from_utf8_lossy(&out.stdout)),
+        _ => false,
+    };
+    cache.lock().unwrap().insert(bin.to_path_buf(), supported);
+    supported
+}
+
+fn help_lists_partial_messages(help: &str) -> bool {
+    help.contains("--include-partial-messages")
+}
+
 /// The text of a top-level `text_delta` stream event, if that is what `v` is.
 /// Subagent (Task) streams carry a `parent_tool_use_id` and are skipped: their
 /// prose is not the reply.
@@ -415,6 +448,22 @@ mod delta_tests {
         assert_eq!(text_delta(&sub), None);
         let start = json!({"type":"stream_event","event":{"type":"message_start"}});
         assert_eq!(text_delta(&start), None);
+    }
+
+    #[test]
+    fn partial_messages_support_is_read_from_help() {
+        let new = "  --include-partial-messages            Include partial message chunks as they\n";
+        assert!(help_lists_partial_messages(new));
+        let old = "  --output-format <format>  Output format\n  --verbose  Override verbose mode\n";
+        assert!(!help_lists_partial_messages(old));
+    }
+
+    /// A path that can't run is "unsupported", not an error: the turn goes
+    /// ahead without streaming and find_claude's own error surfaces as before.
+    #[tokio::test]
+    async fn an_unrunnable_cli_is_treated_as_unsupported() {
+        let ghost = std::env::temp_dir().join("lcb-no-such-claude-binary");
+        assert!(!supports_partial_messages(&ghost).await);
     }
 }
 
@@ -489,6 +538,9 @@ pub async fn claude_send(
     let bundled = crate::claude_bin::bundled_exe(&app);
     let bin = find_claude_with(bundled.clone())?;
     let using_bundled = bundled.as_deref() == Some(bin.as_path());
+    // The shipped CLI is pinned new enough; a user-installed one may predate
+    // the flag, and an unknown option would fail the whole turn.
+    let stream_partial = using_bundled || supports_partial_messages(&bin).await;
     let message = prompt_with_attachments(&message, &attachments.unwrap_or_default());
 
     // When signed in, wire the LingCode Cloud backend into this workspace's
@@ -527,9 +579,6 @@ pub async fn claude_send(
         .arg(&message)
         .arg("--output-format")
         .arg("stream-json")
-        // Token-level `stream_event` lines alongside the whole messages, so the
-        // reply can be drawn as it is written.
-        .arg("--include-partial-messages")
         .arg("--verbose")
         .arg("--permission-mode")
         .arg("bypassPermissions")
@@ -543,6 +592,12 @@ pub async fn claude_send(
         .arg("project,local")
         .arg("--append-system-prompt")
         .arg(&system_prompt);
+    if stream_partial {
+        // Token-level `stream_event` lines alongside the whole messages, so the
+        // reply can be drawn as it is written. Without it the reply still
+        // arrives, just all at once.
+        std_cmd.arg("--include-partial-messages");
+    }
     if let Some(tok) = &cloud_token {
         // Expanded into the ${LINGCODE_CLOUD_TOKEN} .mcp.json header by the CLI.
         std_cmd.env("LINGCODE_CLOUD_TOKEN", tok);
