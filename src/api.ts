@@ -100,6 +100,8 @@ export const api = {
 export type ChatEvent =
   | { kind: "session"; id: string }
   | { kind: "text"; text: string }
+  /** A token chunk of the reply as it is written; the whole block follows as "text". */
+  | { kind: "delta"; text: string }
   | { kind: "thinking"; text: string }
   | { kind: "tool"; name: string; detail: string }
   | { kind: "edit"; name: string; input: any }

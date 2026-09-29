@@ -51,9 +51,14 @@ export async function invoke<T>(cmd: string, args: any = {}): Promise<T> {
       say({ kind: "session", id: "mock-sess" }, 50);
       say({ kind: "tool", name: "Read", detail: "index.html" }, 300);
       say({ kind: "edit", name: "Edit", input: { file_path: `${FOLDER}/index.html`, old_string: "<p>Hello from the preview.</p>", new_string: "<p>Hello, world.</p>" } }, 700);
-      say({ kind: "result", text: "I changed the paragraph to say Hello, world.", is_error: false }, 1100);
-      say({ kind: "done", stderr: "" }, 1200);
-      await new Promise((r) => setTimeout(r, 1300));
+      const answer = "I changed the paragraph to say Hello, world. The preview reloads on its own, so you should see it right away.";
+      const words = answer.split(/(?<= )/);
+      words.forEach((w, i) => say({ kind: "delta", text: w }, 900 + i * 60));
+      const end = 900 + words.length * 60;
+      say({ kind: "text", text: answer }, end + 50);
+      say({ kind: "result", text: answer, is_error: false }, end + 150);
+      say({ kind: "done", stderr: "" }, end + 250);
+      await new Promise((r) => setTimeout(r, end + 350));
       files.set(`${FOLDER}/index.html`, files.get(`${FOLDER}/index.html`)!.replace("Hello from the preview.", "Hello, world."));
       return undefined as T;
     }

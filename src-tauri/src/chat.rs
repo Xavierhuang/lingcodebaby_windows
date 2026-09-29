@@ -377,6 +377,47 @@ fn cli_too_old_hint(model: &str, stderr: &str, bundled: bool) -> Option<&'static
     })
 }
 
+/// The text of a top-level `text_delta` stream event, if that is what `v` is.
+/// Subagent (Task) streams carry a `parent_tool_use_id` and are skipped: their
+/// prose is not the reply.
+fn text_delta(v: &Value) -> Option<&str> {
+    if v.get("parent_tool_use_id").map_or(false, |p| !p.is_null()) {
+        return None;
+    }
+    let ev = v.get("event")?;
+    if ev.get("type")?.as_str()? != "content_block_delta" {
+        return None;
+    }
+    let delta = ev.get("delta")?;
+    if delta.get("type")?.as_str()? != "text_delta" {
+        return None;
+    }
+    delta.get("text")?.as_str().filter(|t| !t.is_empty())
+}
+
+#[cfg(test)]
+mod delta_tests {
+    use super::*;
+
+    #[test]
+    fn picks_top_level_text_deltas_only() {
+        let text = json!({"type":"stream_event","parent_tool_use_id":null,
+            "event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hel"}}});
+        assert_eq!(text_delta(&text), Some("Hel"));
+        let thinking = json!({"type":"stream_event",
+            "event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"hmm"}}});
+        assert_eq!(text_delta(&thinking), None);
+        let tool_json = json!({"type":"stream_event",
+            "event":{"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{"}}});
+        assert_eq!(text_delta(&tool_json), None);
+        let sub = json!({"type":"stream_event","parent_tool_use_id":"toolu_1",
+            "event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"x"}}});
+        assert_eq!(text_delta(&sub), None);
+        let start = json!({"type":"stream_event","event":{"type":"message_start"}});
+        assert_eq!(text_delta(&start), None);
+    }
+}
+
 #[cfg(test)]
 mod model_tests {
     use super::*;
@@ -486,6 +527,9 @@ pub async fn claude_send(
         .arg(&message)
         .arg("--output-format")
         .arg("stream-json")
+        // Token-level `stream_event` lines alongside the whole messages, so the
+        // reply can be drawn as it is written.
+        .arg("--include-partial-messages")
         .arg("--verbose")
         .arg("--permission-mode")
         .arg("bypassPermissions")
@@ -606,6 +650,8 @@ pub async fn claude_send(
     let mut reader = BufReader::new(stdout).lines();
     let mut interrupted = false; // AskUserQuestion ends the turn early
     let mut stderr_buf = String::new();
+    // Every stream_event carries the session id; only report it when it changes.
+    let mut last_session = String::new();
 
     while let Ok(Some(line)) = reader.next_line().await {
         let line = line.trim();
@@ -618,10 +664,18 @@ pub async fn claude_send(
         };
 
         if let Some(sid) = v.get("session_id").and_then(|s| s.as_str()) {
-            let _ = on_event.send(json!({ "kind": "session", "id": sid }));
+            if sid != last_session {
+                last_session = sid.to_string();
+                let _ = on_event.send(json!({ "kind": "session", "id": sid }));
+            }
         }
 
         match v.get("type").and_then(|t| t.as_str()) {
+            Some("stream_event") => {
+                if let Some(t) = text_delta(&v) {
+                    let _ = on_event.send(json!({ "kind": "delta", "text": t }));
+                }
+            }
             Some("assistant") => {
                 let content = v
                     .get("message")

@@ -66,6 +66,12 @@ export class ChatPanel {
   private dotsTimer: number | null = null;
   private thinkingLine: HTMLElement | null = null;
   private thinkStart = 0;
+  /** The reply being written, drawn from "delta" events. Never saved: the
+   *  whole-block "text"/"result" events that follow are the record. */
+  private liveEl: HTMLElement | null = null;
+  private liveText = "";
+  /** The live block got its closing "text" event; the next delta starts a new one. */
+  private liveClosed = false;
   private entries: Entry[] = [];
   private lastAssistantText = "";
   private lastWrittenPath: string | null = null;
@@ -227,6 +233,7 @@ export class ChatPanel {
   private resetTranscript() {
     this.transcript.innerHTML = "";
     this.entries = [];
+    this.endLive();
   }
 
   private async saveHistory() {
@@ -313,7 +320,7 @@ export class ChatPanel {
 
   /** Render one row. `text` is kept verbatim so the row survives a save/restore
    *  round-trip; the HTML is derived from it per kind. */
-  private append(text: string, kind: Kind, clean: boolean, role?: string, live = true) {
+  private append(text: string, kind: Kind, clean: boolean, role?: string, live = true, pop = live) {
     const el = document.createElement("div");
     el.className = "msg " + kind;
     if (role) {
@@ -330,11 +337,11 @@ export class ChatPanel {
       el.appendChild(document.createTextNode(text));
     }
     el.style.display = (this.showThinking || clean) ? "" : "none";
-    this.transcript.appendChild(el);
+    this.transcript.insertBefore(el, this.dotsAnchor());
     this.entries.push({ el, clean, kind, text });
     if (live) {
       // Only live, visible rows pop in; a restored history appears at rest.
-      if (el.style.display !== "none") {
+      if (pop && el.style.display !== "none") {
         el.classList.add("pop");
         el.addEventListener("animationend", () => el.classList.remove("pop"), { once: true });
       }
@@ -486,6 +493,7 @@ export class ChatPanel {
     } catch (err) {
       this.append("Claude error: " + String(err), "note", true);
     } finally {
+      this.endLive();
       this.stopThinkingLine();
       this.setBusy(false);
       this.applyFolds();
@@ -511,39 +519,61 @@ export class ChatPanel {
   private handleEvent(e: ChatEvent) {
     switch (e.kind) {
       case "session": this.session = e.id; break;
+      case "delta":
+        this.streamDelta(e.text);
+        break;
       case "thinking":
+        this.endLive();
         this.append(`🧠 ${e.text}`, "thinking", false);
         break;
       case "text":
         this.lastAssistantText = e.text;
+        // The live row stays up as the answer-so-far until the next step or
+        // the result replaces it. With steps shown, the step row is that copy.
+        if (this.liveEl && !this.showThinking) {
+          this.liveText = e.text;
+          this.liveEl.textContent = e.text;
+          this.liveClosed = true;
+        } else {
+          this.endLive();
+        }
         this.append(e.text, "thinking", false);
         break;
       case "tool":
+        this.endLive();
         this.append(`🔧 ${e.name} ${e.detail}`, "tool", false);
         break;
       case "edit": {
+        this.endLive();
         const file = e.input?.file_path || e.input?.path;
         if (typeof file === "string" && file) this.lastWrittenPath = file;
         this.append(this.renderEdit(e.name, e.input), "edit", true);
         break;
       }
       case "ask_user":
+        this.endLive();
         this.stopThinkingLine();
         this.showOptions(e.question, e.options);
         if (this.playSounds) beep(880);
         this.onAskUser();
         break;
-      case "result":
+      case "result": {
+        // A final answer that is what we just streamed replaces the live row
+        // in place, without popping in a second time.
+        const streamed = this.liveText.trim();
+        this.endLive();
+        const pop = (t: string) => t.trim() !== streamed;
         if (e.is_error) {
           this.append("Claude error: " + e.text, "note", true);
         } else if (e.text && e.text.trim() && e.text.trim() !== this.lastAssistantText.trim()) {
-          this.append(e.text, "assistant", true, "Claude");
+          this.append(e.text, "assistant", true, "Claude", true, pop(e.text));
         } else if (this.lastAssistantText.trim()) {
           // Promote the streamed text to a final answer.
-          this.append(this.lastAssistantText, "assistant", true, "Claude");
+          this.append(this.lastAssistantText, "assistant", true, "Claude", true, pop(this.lastAssistantText));
         }
         this.onFilesModified();
         break;
+      }
       case "awaiting":
         this.interrupted = true;
         break;
@@ -604,6 +634,38 @@ export class ChatPanel {
     if (!this.busy) return;
     api.claudeAbort();
     this.append("Stopped.", "note", true);
+  }
+
+  /** Grow the live reply by one token chunk. It sits above the thinking dots,
+   *  so the dots keep running under the text while the turn continues. */
+  private streamDelta(chunk: string) {
+    if (this.liveClosed) this.endLive();
+    if (!this.liveEl) {
+      this.liveEl = document.createElement("div");
+      this.liveEl.className = "msg assistant streaming pop";
+      this.liveEl.addEventListener("animationend", (ev) => {
+        if (ev.animationName === "lcb-pop") this.liveEl?.classList.remove("pop");
+      });
+      this.transcript.insertBefore(this.liveEl, this.dotsAnchor());
+      this.emptyEl.hidden = true;
+      this.liveText = "";
+    }
+    this.liveText += chunk;
+    this.liveEl.textContent = this.liveText;
+    this.scrollEl.scrollTop = this.scrollEl.scrollHeight;
+  }
+
+  /** The thinking indicator stays the last row (Mac pins it to the bottom of
+   *  the stack), so new rows go in above it. */
+  private dotsAnchor(): Node | null {
+    return this.thinkingLine?.parentNode === this.transcript ? this.thinkingLine : null;
+  }
+
+  private endLive() {
+    this.liveEl?.remove();
+    this.liveEl = null;
+    this.liveText = "";
+    this.liveClosed = false;
   }
 
   private startThinkingLine() {

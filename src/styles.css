@@ -198,8 +198,11 @@ input.field:focus, textarea.field:focus, select.field:focus { outline: none; bor
 /* Mac LCBTheme bounceView: squash-and-settle on each send/stop tap. */
 .send-btn.bounce { animation: lcb-bounce 0.3s ease-out; }
 @keyframes lcb-bounce { 0% { transform: scale(1); } 35% { transform: scale(0.86); } 70% { transform: scale(1.06); } 100% { transform: scale(1); } }
+/* The reply being written: a blinking caret after the last token. */
+.msg.streaming::after { content: ""; display: inline-block; width: 7px; height: 1.05em; margin-left: 2px; vertical-align: text-bottom; background: var(--accent); border-radius: 1px; animation: lcb-caret 1s steps(1, end) infinite; }
+@keyframes lcb-caret { 50% { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) {
-  .msg.pop, .send-btn.bounce { animation: none; }
+  .msg.pop, .send-btn.bounce, .msg.streaming::after { animation: none; }
   .thinking-dots span { animation: none; opacity: 1; }
 }
 .options { display: flex; flex-direction: column; gap: 6px; padding: 4px 0 10px; }
