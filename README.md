@@ -37,14 +37,22 @@ LingCode Cloudflare Workers API.
 | Preferences | NSUserDefaults | JSON in OS config dir (`src/prefs.rs`) |
 | Menus | NSMenu | Tauri native menu (`src/lib.rs`) |
 
-## Prerequisites
+## Using LingCodeBaby
+
+Download the installer from [Releases](https://github.com/Xavierhuang/lingcodebaby_windows/releases)
+and run it. **Nothing else to install on Windows:** the installer ships Claude Code (`claude.exe`),
+and Node.js is not needed. Sign in with a LingCode account (LingModel) or your Claude login.
+Linux builds do not bundle Claude Code yet; install it from
+[docs.claude.com/claude-code](https://docs.claude.com/claude-code) there.
+
+## Prerequisites (only to build from source)
 
 - [Rust](https://rustup.rs/) (stable)
 - [Node.js](https://nodejs.org/) 18+
 - Platform build tools: **Windows** — VS Build Tools + WebView2 runtime;
   **macOS** — Xcode CLT; **Linux** — webkit2gtk.
-- The [`claude` CLI](https://docs.claude.com/claude-code) installed and signed in
-  (`claude login`) for the chat panel.
+- For the chat panel in a dev build: the [`claude` CLI](https://docs.claude.com/claude-code)
+  on PATH (release builds bundle it via `scripts/fetch-claude-windows.ps1`).
 
 ## Develop / run
 
