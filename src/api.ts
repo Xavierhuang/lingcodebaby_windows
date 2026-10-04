@@ -8,6 +8,8 @@ export interface Prefs {
   custom_endpoint_url: string;
   onboarding_complete: boolean;
   appearance: string;
+  remote_access?: boolean;
+  remote_host_id?: string;
 }
 /** What Run app starts (src-tauri/src/runapp.rs). */
 export interface RunTarget {
@@ -80,6 +82,9 @@ export const api = {
   runTarget: (folder: string) => invoke<RunTarget | null>("run_target", { folder }),
   runStart: (folder: string) => invoke<RunTarget>("run_start", { folder }),
   runStatus: (folder: string) => invoke<{ running: boolean | null }>("run_status", { folder }),
+  remoteRegister: () => invoke<{ hostId: string; name: string; wsUrl: string }>("remote_register"),
+  remoteCreateHelperLink: () => invoke<{ url: string; expiresAt: number }>("remote_create_helper_link"),
+  remoteStopSharing: () => invoke<void>("remote_stop_sharing"),
   deployCheck: (token: string, slug: string, exclude: string | null) =>
     invoke<any>("deploy_check", { token, slug, exclude }),
 

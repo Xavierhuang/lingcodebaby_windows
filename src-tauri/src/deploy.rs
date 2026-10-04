@@ -15,7 +15,7 @@ const KEYCHAIN_SERVICE: &str = "LingCode";
 const KEYCHAIN_ACCOUNT: &str = "lingcode_auth_access_token";
 const SKIP: &[&str] = &[".git", ".DS_Store", "node_modules", ".env", ".lingcodedeploy.json"];
 
-fn api_base() -> String {
+pub(crate) fn api_base() -> String {
     std::env::var("LINGCODE_API_BASE").unwrap_or_else(|_| "https://lingcode.dev".to_string())
 }
 

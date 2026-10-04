@@ -40,6 +40,9 @@ export class ChatPanel {
    *  Review tab re-read from here. */
   onChatSaved: (doc: ChatDoc) => void = () => {};
   onBusyChange: (busy: boolean) => void = () => {};
+  /** Anything in the transcript changed (a row, a streamed token, busy, a
+   *  question). Remote access mirrors the chat to lingcode.dev/remote from here. */
+  onTranscriptChange: () => void = () => {};
   // Gate a send on required auth (e.g. LingModel needs a LingCode sign-in).
   // Return false to abort the send. Set from main.ts.
   ensureAuth: (model: string) => Promise<boolean> = async () => true;
@@ -53,6 +56,8 @@ export class ChatPanel {
   private store: ChatStore | null = null;
   private doc: ChatDoc | null = null;
   private openFolds = new Set<number>();
+  /** The multiple-choice question on screen, if any (for remote access). */
+  private pendingQuestion: { question: string; options: string[] } | null = null;
 
   private transcript: HTMLElement;
   private emptyEl: HTMLElement;
@@ -230,10 +235,62 @@ export class ChatPanel {
 
   currentChatId(): string | null { return this.doc ? this.doc.id : null; }
 
+  // ---- remote access (lingcode.dev/remote) ---------------------------------
+
+  /** Send a message that came from lingcode.dev/remote, exactly as if typed:
+   *  queued while a turn runs, same session, same model. */
+  sendExternal(text: string) {
+    const t = text.trim();
+    if (!t) return;
+    if (this.pendingQuestion) this.clearOptions();
+    void this.send(t);
+  }
+
+  /** The chat in the shape the Mac app sends lingcode.dev/remote
+   *  (ClaudeSessionSnapshot): whole state, stable message ids. */
+  remoteSnapshot() {
+    const messages = this.entries.map((e, i) => {
+      const id = `m${i}`;
+      switch (e.kind) {
+        case "user": return { id, role: "user", content: [{ type: "text", text: e.text }] };
+        case "thinking": return { id, role: "assistant", content: [{ type: "thinking", text: e.text }] };
+        case "tool": {
+          const line = e.text.replace(/^🔧\s*/, "");
+          const name = line.split(/\s+/)[0] || "Tool";
+          // A string input renders as plain text on lingcode.dev/remote ("→ Bash npm run dev").
+          return { id, role: "assistant", content: [{ type: "toolUse", id: `t${i}`, name, input: line.slice(name.length).trim(), ready: true }] };
+        }
+        case "edit": {
+          const first = e.text.split("\n")[0].replace(/^✏️\s*/, "");
+          const name = first.split(/\s+/)[0] || "Edit";
+          return { id, role: "assistant", content: [{ type: "toolUse", id: `t${i}`, name, input: first.slice(name.length).trim(), ready: true }] };
+        }
+        case "note": return { id, role: "system", content: [{ type: "text", text: e.text }] };
+        default: return { id, role: "assistant", content: [{ type: "text", text: e.text }] };
+      }
+    });
+    const firstUser = this.entries.find((e) => e.kind === "user")?.text ?? "";
+    return {
+      isStreaming: this.busy,
+      title: firstUser.slice(0, 60) || "New chat",
+      model: this.getModel(),
+      messages,
+      inFlight: this.liveText ? { role: "assistant", content: [{ type: "text", text: this.liveText }] } : null,
+      pendingApproval: null,
+      pendingUserInput: this.pendingQuestion
+        ? { id: "q", toolUseID: "q", questions: [{ question: this.pendingQuestion.question, header: "", multiSelect: false,
+            options: this.pendingQuestion.options.map((label) => ({ label, description: "" })) }] }
+        : null,
+    };
+  }
+
+  hasQuestion() { return !!this.pendingQuestion; }
+
   private resetTranscript() {
     this.transcript.innerHTML = "";
     this.entries = [];
     this.endLive();
+    this.onTranscriptChange();
   }
 
   private async saveHistory() {
@@ -348,6 +405,7 @@ export class ChatPanel {
       this.emptyEl.hidden = true;
       this.scrollEl.scrollTop = this.scrollEl.scrollHeight;
     }
+    this.onTranscriptChange();
   }
 
   // ---- attachments --------------------------------------------------------
@@ -611,6 +669,7 @@ export class ChatPanel {
   private showOptions(question: string, options: string[]) {
     this.append(question, "assistant", true, "Claude");
     this.clearOptions();
+    this.pendingQuestion = { question, options };
     for (const opt of options) {
       const btn = document.createElement("button");
       btn.className = "opt";
@@ -620,7 +679,10 @@ export class ChatPanel {
     }
   }
 
-  private clearOptions() { this.optionsEl.innerHTML = ""; }
+  private clearOptions() {
+    this.optionsEl.innerHTML = "";
+    if (this.pendingQuestion) { this.pendingQuestion = null; this.onTranscriptChange(); }
+  }
 
   private setBusy(b: boolean) {
     this.busy = b;
@@ -628,6 +690,7 @@ export class ChatPanel {
     this.sendBtn.title = b ? "Stop" : "Send";
     this.sendBtn.classList.toggle("stop", b);
     this.onBusyChange(b);
+    this.onTranscriptChange();
   }
 
   abort() {
@@ -652,6 +715,7 @@ export class ChatPanel {
     }
     this.liveText += chunk;
     this.liveEl.textContent = this.liveText;
+    this.onTranscriptChange();
     this.scrollEl.scrollTop = this.scrollEl.scrollHeight;
   }
 

@@ -365,3 +365,8 @@ input.field:focus, textarea.field:focus, select.field:focus { outline: none; bor
 .onboarding-error { color: var(--error); font-size: 12.5px; min-height: 18px; margin-top: 12px; }
 .onboarding-buttons .onboarding-skip { background: transparent; border: 1px solid var(--border); }
 .onboarding-buttons .onboarding-skip:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* Remote access: Share… gets a dot while this PC is reachable at lingcode.dev/remote;
+   the helper pill is the visible reminder that someone else can chat with the agent. */
+.btn.share.live::before { content: "●"; color: #2ea043; margin-right: 5px; font-size: 9px; vertical-align: 1px; }
+.pill.helper-live { cursor: pointer; border-color: #d29922; color: #d29922; background: color-mix(in srgb, #d29922 12%, transparent); }

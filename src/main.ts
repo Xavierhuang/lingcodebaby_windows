@@ -6,6 +6,7 @@ import { ChatPanel } from "./chat";
 import { ChatStore, ConversationsPane } from "./conversations";
 import { PanelPane } from "./panel";
 import { showSettings } from "./settings";
+import { RemoteHost } from "./remote";
 import { PANE, badgeForTarget, nativeRunText, paneLayout } from "./simple-logic";
 import { runDeploy } from "./deploy";
 import { checkForUpdates } from "./updater";
@@ -31,6 +32,8 @@ app.innerHTML = `
     <span class="spacer"></span>
     <button class="btn primary run" hidden title="Reload the preview">▶ Run app</button>
     <button class="btn publish" hidden title="Put this project online">↑ Publish</button>
+    <button class="btn share" title="Invite a helper: they can chat with this PC's agent for 2 hours">Share…</button>
+    <span class="pill helper-live" hidden title="A helper link is active"></span>
     <button class="btn icon settings" title="Settings">⚙</button>
   </div>
   <div class="panes">
@@ -46,6 +49,8 @@ const projectName = el<HTMLElement>(".project-name");
 const kindPill = el<HTMLElement>(".pill.kind");
 const runBtn = el<HTMLButtonElement>(".btn.run");
 const publishBtn = el<HTMLButtonElement>(".btn.publish");
+const shareBtn = el<HTMLButtonElement>(".btn.share");
+const helperPill = el<HTMLElement>(".pill.helper-live");
 const settingsBtn = el<HTMLButtonElement>(".btn.settings");
 const conversationsEl = el<HTMLElement>(".conversations");
 const convDivider = el<HTMLElement>(".conv-divider");
@@ -177,12 +182,17 @@ editor.onChange = () => { if (!dirty) { dirty = true; updateFileHead(); } };
 
 runBtn.onclick = () => runApp();
 publishBtn.onclick = () => runDeploy(folder);
-settingsBtn.onclick = () => showSettings(
-  { appearance: currentAppearance, playSounds: chat.playSounds, showAllSteps: chat.getShowAllSteps() },
+shareBtn.onclick = () => { void inviteHelper(); };
+helperPill.onclick = () => { void stopSharing(); };
+settingsBtn.onclick = () => openSettings();
+function openSettings() { return showSettings(
+  { appearance: currentAppearance, playSounds: chat.playSounds, showAllSteps: chat.getShowAllSteps(),
+    remoteAccess: remoteOn, remoteStatus: remote.statusText },
   {
     onAppearance: (a) => setAppearance(a),
     onSounds: (on) => { chat.playSounds = on; persistPrefs(); },
     onShowAllSteps: (on) => { chat.setShowAllSteps(on); lsSet(LS.steps, on ? "1" : "0"); },
+    onRemoteAccess: (on) => { void setRemoteAccess(on); },
     anthropicKey: doConfigureAnthropicKey,
     deepseekKey: doConfigureDeepSeekKey,
     customEndpoint: showEndpointSheet,
@@ -190,7 +200,58 @@ settingsBtn.onclick = () => showSettings(
     checkUpdates: () => checkForUpdates(false),
     welcome: () => showOnboarding(false),
   },
-);
+); }
+
+// ---- remote access + "Invite a helper" --------------------------------------
+// remote.ts mirrors the open chat to lingcode.dev/remote; a helper link lets
+// someone else chat with it for two hours.
+const remote = new RemoteHost(chat, () => (folder ? `${baseName(folder)} · ` : "") + "LingCodeBaby chat");
+let remoteOn = false;
+let helperTimer: number | undefined;
+
+async function setRemoteAccess(on: boolean) {
+  remoteOn = on;
+  try { const p = await api.getPrefs(); await api.setPrefs({ ...p, remote_access: on }); } catch { /* keep going */ }
+  if (on) await remote.start(); else { remote.stop(); setHelperPill(0); }
+}
+
+function setHelperPill(until: number) {
+  window.clearTimeout(helperTimer);
+  helperPill.hidden = !until || until < Date.now();
+  if (helperPill.hidden) return;
+  const at = new Date(until).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  helperPill.textContent = `🙋 Helper can chat until ${at} · Stop`;
+  helperTimer = window.setTimeout(() => setHelperPill(0), until - Date.now());
+}
+
+async function inviteHelper() {
+  const ok = await confirmDialog(
+    "Invite a helper?\n\nThey get a link that lets them chat with this PC's AI agent for 2 hours. The agent can change files and run programs on this PC, so only invite someone you trust. You can stop it any time.",
+    "Create link");
+  if (!ok) return;
+  if (!remoteOn) await setRemoteAccess(true);
+  try {
+    const link = await api.remoteCreateHelperLink();
+    try { await navigator.clipboard.writeText(link.url); } catch { /* shown below */ }
+    setHelperPill(link.expiresAt);
+    await alertDialog(`Helper link copied. Send it to your helper:\n\n${link.url}\n\nIt works for 2 hours, while LingCodeBaby is open. Click the 🙋 Helper pill at the top to stop it early.`);
+  } catch (e) {
+    await alertDialog(`Couldn't create a helper link: ${String(e)}`);
+  }
+}
+
+async function stopSharing() {
+  if (!(await confirmDialog("Stop sharing? Your helper's link stops working right away.", "Stop sharing"))) return;
+  try { await api.remoteStopSharing(); setHelperPill(0); }
+  catch (e) { await alertDialog(`Couldn't stop sharing: ${String(e)}`); }
+}
+
+remote.onStatus = (status) => {
+  shareBtn.classList.toggle("live", status === "online");
+};
+void (async () => {
+  try { const p = await api.getPrefs(); if (p.remote_access) { remoteOn = true; await remote.start(); } } catch { /* off */ }
+})();
 
 async function runApp() {
   if (!folder) { doOpenFolder(); return; }
@@ -502,6 +563,8 @@ listen<string>("menu", async (ev) => {
   if (id.startsWith("model:")) { setModel(id.slice("model:".length)); return; }
   if (id.startsWith("appearance:")) { setAppearance(id.slice("appearance:".length) as Appearance); return; }
   switch (id) {
+    case "remote_settings": void openSettings(); break;
+    case "invite_helper": void inviteHelper(); break;
     case "open_file": await doOpenFile(); break;
     case "open_folder": await doOpenFolder(); break;
     case "new_quinny_project": await doNewQuinnyProject(); break;

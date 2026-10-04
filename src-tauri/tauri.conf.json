@@ -23,7 +23,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data:; frame-src 'self' asset: http://asset.localhost; connect-src 'self' ipc: http://ipc.localhost",
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data:; frame-src 'self' asset: http://asset.localhost; connect-src 'self' ipc: http://ipc.localhost wss://lingcode.dev",
       "assetProtocol": {
         "enable": true,
         "scope": [

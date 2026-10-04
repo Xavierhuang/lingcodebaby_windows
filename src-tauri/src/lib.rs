@@ -8,6 +8,7 @@ mod fsops;
 mod history;
 mod prefs;
 mod quinny;
+mod remote;
 mod runapp;
 
 use std::collections::HashMap;
@@ -180,6 +181,9 @@ fn build_menu(app: &tauri::AppHandle, prefs: &prefs::Prefs) -> tauri::Result<(Me
             &MenuItem::with_id(app, "connect_backend", "Connect Backend to This Folder", true, None::<&str>)?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "backend_console", "Open Backend Console", true, None::<&str>)?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, "remote_settings", "Remote Access…", true, None::<&str>)?,
+            &MenuItem::with_id(app, "invite_helper", "Invite a Helper…", true, None::<&str>)?,
         ],
     )?;
 
@@ -352,6 +356,9 @@ pub fn run() {
             runapp::run_target,
             runapp::run_start,
             runapp::run_status,
+            remote::remote_register,
+            remote::remote_create_helper_link,
+            remote::remote_stop_sharing,
             deploy::deploy_check,
             deploy::deploy_upload,
             quinny::quinny_available,

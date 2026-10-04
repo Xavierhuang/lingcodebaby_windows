@@ -31,6 +31,13 @@ pub struct Prefs {
     /// so this is deliberately beyond parity.
     #[serde(default = "default_appearance")]
     pub appearance: String,
+    /// Remote access: this PC shows up at lingcode.dev/remote for the signed-in
+    /// account while the app runs (remote.rs). Off until switched on.
+    #[serde(default)]
+    pub remote_access: bool,
+    /// The id lingcode.dev gave this PC, so it re-registers as the same host.
+    #[serde(default)]
+    pub remote_host_id: String,
 }
 
 impl Default for Prefs {
@@ -45,6 +52,8 @@ impl Default for Prefs {
             custom_endpoint_url: String::new(),
             onboarding_complete: false,
             appearance: default_appearance(),
+            remote_access: false,
+            remote_host_id: String::new(),
         }
     }
 }

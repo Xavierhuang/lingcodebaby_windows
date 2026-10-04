@@ -6,12 +6,15 @@ export interface SettingsState {
   appearance: Appearance;
   playSounds: boolean;
   showAllSteps: boolean;
+  remoteAccess: boolean;
+  remoteStatus: string;
 }
 
 export interface SettingsActions {
   onAppearance: (a: Appearance) => void;
   onSounds: (on: boolean) => void;
   onShowAllSteps: (on: boolean) => void;
+  onRemoteAccess: (on: boolean) => void;
   anthropicKey: () => Promise<void>;
   deepseekKey: () => Promise<void>;
   customEndpoint: () => Promise<void>;
@@ -31,6 +34,8 @@ export function showSettings(state: SettingsState, actions: SettingsActions): Pr
           <select class="field appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
         <div class="settings-row"><span class="k">Sounds</span><label><input type="checkbox" class="sounds"/> Chime when Claude finishes or asks</label></div>
         <div class="settings-row"><span class="k">Transcript</span><label><input type="checkbox" class="steps"/> Show all steps (every command and edit)</label></div>
+        <div class="settings-row"><span class="k">Remote access</span><label><input type="checkbox" class="remote"/> Chat with this PC's agent from lingcode.dev/remote</label></div>
+        <div class="settings-row"><span class="k"></span><span class="faint remote-status"></span></div>
         <div class="settings-actions">
           <button class="btn sm" data-act="anthropic">Anthropic API key…</button>
           <button class="btn sm" data-act="deepseek">DeepSeek API key…</button>
@@ -50,6 +55,14 @@ export function showSettings(state: SettingsState, actions: SettingsActions): Pr
     sel.onchange = () => actions.onAppearance(sel.value as Appearance);
     sounds.onchange = () => actions.onSounds(sounds.checked);
     steps.onchange = () => actions.onShowAllSteps(steps.checked);
+    const remote = overlay.querySelector(".remote") as HTMLInputElement;
+    const remoteStatus = overlay.querySelector(".remote-status") as HTMLElement;
+    remote.checked = state.remoteAccess;
+    remoteStatus.textContent = state.remoteAccess ? state.remoteStatus : "Off. Signed in to LingCode, you can open lingcode.dev/remote on your phone and chat with this PC.";
+    remote.onchange = () => {
+      actions.onRemoteAccess(remote.checked);
+      remoteStatus.textContent = remote.checked ? "Connecting…" : "Off";
+    };
     const close = () => { overlay.remove(); resolve(); };
     const run = async (fn: () => Promise<void>) => { close(); await fn(); };
     overlay.querySelectorAll<HTMLButtonElement>("[data-act]").forEach((b) => {
