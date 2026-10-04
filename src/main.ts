@@ -1,12 +1,12 @@
 import "./styles.css";
-import { api } from "./api";
+import { api, type RunTarget } from "./api";
 import { FileTree } from "./tree";
 import { CodeEditor } from "./editor";
 import { ChatPanel } from "./chat";
 import { ChatStore, ConversationsPane } from "./conversations";
 import { PanelPane } from "./panel";
 import { showSettings } from "./settings";
-import { PANE, kindBadge, paneLayout } from "./simple-logic";
+import { PANE, badgeForTarget, nativeRunText, paneLayout } from "./simple-logic";
 import { runDeploy } from "./deploy";
 import { checkForUpdates } from "./updater";
 import { alertDialog, promptText, confirmDialog } from "./ui";
@@ -92,6 +92,9 @@ let currentFile: string | null = null;
 let dirty = false;
 let folder: string | null = null;
 let store: ChatStore | null = null;
+/** What Run app starts for the open folder (runapp.rs); null = nothing yet. */
+let runTarget: RunTarget | null = null;
+let runPoll: number | undefined;
 
 // ---- layout: pane widths + collapse, persisted in localStorage --------------
 const LS = { conv: "lingcodebaby.simple.conversationsCollapsed", panelW: "lingcodebaby.simple.panelWidth", panelC: "lingcodebaby.simple.panelCollapsed", steps: "lingcodebaby.simple.showAllSteps" };
@@ -161,7 +164,7 @@ chat.onChatSaved = () => refreshConversations();
 chat.onBusyChange = (busy) => {
   conversations.setRunning(busy ? chat.currentChatId() : null);
   runBtn.disabled = busy;
-  runBtn.title = busy ? "Wait for the current reply to finish — the app is being changed right now." : "Reload the preview";
+  runBtn.title = busy ? "Wait for the current reply to finish — the app is being changed right now." : "Run your app";
 };
 
 conversations.onNew = () => newChat();
@@ -189,11 +192,49 @@ settingsBtn.onclick = () => showSettings(
   },
 );
 
-function runApp() {
+async function runApp() {
   if (!folder) { doOpenFolder(); return; }
   panel.setCollapsed(false);
   panel.select("preview");
-  panel.reloadPreview();
+  // Look again: the agent may just have built the app or written .lingcode/run.json.
+  await refreshRunTarget();
+  if (!runTarget || runTarget.kind === "web") { panel.reloadPreview(); return; }
+  const label = runTarget.label;
+  panel.setNativeRun(nativeRunText(label, null, true));
+  try {
+    await api.runStart(folder);
+    window.setTimeout(() => { void refreshRunStatus(); }, 2500);
+  } catch (e) {
+    panel.setNativeRun(nativeRunText(label, false), `Couldn't start ${label}: ${String(e)}`);
+  }
+}
+
+/** Point the Preview at the folder's web page, or at its app's running state. */
+async function refreshRunTarget() {
+  if (!folder) return;
+  try { runTarget = await api.runTarget(folder); } catch { runTarget = null; }
+  kindPill.textContent = badgeForTarget(runTarget);
+  if (runTarget?.kind === "web" && runTarget.path) {
+    panel.setPreview(runTarget.path);
+  } else if (runTarget) {
+    panel.setNativeRun(nativeRunText(runTarget.label, null));
+    void refreshRunStatus();
+  } else {
+    panel.setPreview(null);
+  }
+  window.clearInterval(runPoll);
+  // Only a Windows program can be checked by name; poll it so the Preview
+  // tracks the user starting or quitting it outside LingCodeBaby.
+  if (runTarget?.kind === "open" && runTarget.path?.toLowerCase().endsWith(".exe")) {
+    runPoll = window.setInterval(() => { void refreshRunStatus(); }, 3000);
+  }
+}
+
+async function refreshRunStatus() {
+  if (!folder || !runTarget || runTarget.kind === "web") return;
+  let running: boolean | null = null;
+  try { running = (await api.runStatus(folder)).running; } catch { running = null; }
+  panel.setNativeRun(nativeRunText(runTarget.label, running));
 }
 
 // ---- chats -----------------------------------------------------------------
@@ -295,12 +336,9 @@ async function loadFolder(path: string) {
   projectName.classList.remove("none");
   runBtn.hidden = false;
   publishBtn.hidden = false;
-  let hasIndex = false;
-  try { hasIndex = await api.deployHasIndex(path); } catch { hasIndex = false; }
-  kindPill.textContent = kindBadge(hasIndex);
   kindPill.hidden = false;
   panel.hasFolder = true;
-  panel.setPreview(hasIndex ? `${path.replace(/[\\/]+$/, "")}/index.html` : null);
+  await refreshRunTarget();
   chat.setStore(path, store);
   updateFileHead();
   updateTitle();

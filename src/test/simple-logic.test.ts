@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   deriveTitle, groupByDay, foldTurns, adoptLegacy, paneLayout, outcomeOptions, kindBadge,
+  badgeForTarget, nativeRunText,
 } from "../simple-logic.ts";
 
 test("a chat's title is its first user message, cut at a word boundary under 60 chars", () => {
@@ -96,4 +97,16 @@ test("the outcome picker offers the three Mac tiers plus LingModel, then everyth
 test("the kind badge says Web app only when the folder has an index.html", () => {
   assert.equal(kindBadge(true), "Web app");
   assert.equal(kindBadge(false), "Project");
+});
+
+test("the project pill names what Run app starts", () => {
+  assert.equal(badgeForTarget({ badge: "Windows app" }), "Windows app");
+  assert.equal(badgeForTarget(null), "Project");
+});
+
+test("an app in its own window says whether it is running, not 'No index.html'", () => {
+  assert.equal(nativeRunText("AURA_V1.exe", true).title, "AURA_V1.exe is running");
+  assert.equal(nativeRunText("AURA_V1.exe", false).button, "▶ Run app");
+  assert.match(nativeRunText("AURA_V1.exe", null, true).title, /^Starting AURA_V1\.exe/);
+  for (const s of [true, false, null] as const) assert.doesNotMatch(JSON.stringify(nativeRunText("x", s)), /index\.html/);
 });

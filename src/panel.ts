@@ -105,9 +105,28 @@ export class PanelPane {
     this.previewEmpty.hidden = !!indexPath;
     const sub = this.previewEmpty.querySelector(".sub") as HTMLElement;
     const run = this.previewEmpty.querySelector(".run-preview") as HTMLButtonElement;
-    sub.textContent = this.hasFolder ? "No index.html in this folder yet — ask for one, then press Run app." : "Open a project, then press Run app.";
+    (this.previewEmpty.querySelector("b") as HTMLElement).textContent = "Your app isn't running";
+    (this.previewEmpty.querySelector(".globe") as HTMLElement).textContent = "🌐";
+    run.textContent = "▶ Run app";
+    sub.textContent = this.hasFolder ? "Nothing to run yet — ask the agent to make your app or set up how to run it, then press Run app." : "Open a project, then press Run app.";
     run.hidden = !this.hasFolder;
     if (indexPath) this.reloadPreview(); else this.frame.removeAttribute("src");
+  }
+
+  /** An app that runs in its own window (a Windows program, TouchDesigner, a
+   *  script): say whether it is running instead of showing an empty preview. */
+  setNativeRun(text: { title: string; sub: string; button: string }, error?: string) {
+    this.previewUrl = null;
+    this.frame.hidden = true;
+    this.frame.removeAttribute("src");
+    this.previewEmpty.hidden = false;
+    this.urlEl.textContent = text.title;
+    (this.previewEmpty.querySelector(".globe") as HTMLElement).textContent = "🪟";
+    (this.previewEmpty.querySelector("b") as HTMLElement).textContent = text.title;
+    (this.previewEmpty.querySelector(".sub") as HTMLElement).textContent = error || text.sub;
+    const run = this.previewEmpty.querySelector(".run-preview") as HTMLButtonElement;
+    run.textContent = text.button;
+    run.hidden = false;
   }
 
   reloadPreview() {

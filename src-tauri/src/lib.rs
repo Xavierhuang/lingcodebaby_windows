@@ -8,6 +8,7 @@ mod fsops;
 mod history;
 mod prefs;
 mod quinny;
+mod runapp;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -348,6 +349,9 @@ pub fn run() {
             deploy::deploy_delete_token,
             deploy::deploy_slugify,
             deploy::deploy_has_index,
+            runapp::run_target,
+            runapp::run_start,
+            runapp::run_status,
             deploy::deploy_check,
             deploy::deploy_upload,
             quinny::quinny_available,

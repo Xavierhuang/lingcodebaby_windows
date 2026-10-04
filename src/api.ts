@@ -9,6 +9,14 @@ export interface Prefs {
   onboarding_complete: boolean;
   appearance: string;
 }
+/** What Run app starts (src-tauri/src/runapp.rs). */
+export interface RunTarget {
+  kind: "web" | "command" | "open";
+  label: string;
+  badge: string;
+  command: string | null;
+  path: string | null;
+}
 export interface EndpointConfig { enabled: boolean; url: string; key_present: boolean; }
 
 /** One rendered transcript row, as persisted. `clean` mirrors the Mac
@@ -69,6 +77,9 @@ export const api = {
   deployDeleteToken: () => invoke<void>("deploy_delete_token"),
   deploySlugify: (input: string) => invoke<string>("deploy_slugify", { input }),
   deployHasIndex: (folder: string) => invoke<boolean>("deploy_has_index", { folder }),
+  runTarget: (folder: string) => invoke<RunTarget | null>("run_target", { folder }),
+  runStart: (folder: string) => invoke<RunTarget>("run_start", { folder }),
+  runStatus: (folder: string) => invoke<{ running: boolean | null }>("run_status", { folder }),
   deployCheck: (token: string, slug: string, exclude: string | null) =>
     invoke<any>("deploy_check", { token, slug, exclude }),
 

@@ -153,3 +153,16 @@ export function outcomeOptions(names: Record<string, string>): OutcomeGroup[] {
 export function kindBadge(hasIndexHtml: boolean): "Web app" | "Project" {
   return hasIndexHtml ? "Web app" : "Project";
 }
+
+/** The project pill for whatever Run app would start ("Windows app", "TouchDesigner", …). */
+export function badgeForTarget(target: { badge: string } | null): string {
+  return target?.badge || "Project";
+}
+
+/** The Preview tab's words for an app that runs in its own window. */
+export function nativeRunText(label: string, running: boolean | null, starting = false): { title: string; sub: string; button: string } {
+  if (starting) return { title: `Starting ${label}…`, sub: "It opens in its own window.", button: "▶ Run again" };
+  if (running === true) return { title: `${label} is running`, sub: "It runs in its own window, not in this preview.", button: "▶ Run again" };
+  if (running === false) return { title: `${label} isn't running`, sub: "Press Run app to start it in its own window.", button: "▶ Run app" };
+  return { title: label, sub: "Runs in its own window, not in this preview.", button: "▶ Run app" };
+}
