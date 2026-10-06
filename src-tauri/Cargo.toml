@@ -1,6 +1,6 @@
 [package]
 name = "lingcodebaby"
-version = "1.5.2"
+version = "1.5.3"
 description = "LingCodeBaby — a minimal cross-platform IDE"
 authors = ["LingCode"]
 edition = "2021"
