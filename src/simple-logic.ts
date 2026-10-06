@@ -166,3 +166,13 @@ export function nativeRunText(label: string, running: boolean | null, starting =
   if (running === false) return { title: `${label} isn't running`, sub: "Press Run app to start it in its own window.", button: "▶ Run app" };
   return { title: label, sub: "Runs in its own window, not in this preview.", button: "▶ Run app" };
 }
+
+/** The project a picked folder belongs to. `.lingcode` is LingCodeBaby's own
+ *  data folder inside a project (chats, run.json); opened by mistake, Run app
+ *  found no index.html there and the agent worked one level down from the
+ *  real project. Open the project around it instead. */
+export function projectRootFor(path: string): string {
+  const trimmed = path.replace(/[\\/]+$/, "");
+  const match = /^(.*)[\\/]\.lingcode$/i.exec(trimmed);
+  return match && match[1] ? match[1] : path;
+}

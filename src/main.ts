@@ -7,7 +7,7 @@ import { ChatStore, ConversationsPane } from "./conversations";
 import { PanelPane } from "./panel";
 import { showSettings } from "./settings";
 import { RemoteHost } from "./remote";
-import { PANE, badgeForTarget, nativeRunText, paneLayout } from "./simple-logic";
+import { PANE, badgeForTarget, nativeRunText, paneLayout, projectRootFor } from "./simple-logic";
 import { runDeploy } from "./deploy";
 import { checkForUpdates } from "./updater";
 import { alertDialog, promptText, confirmDialog } from "./ui";
@@ -386,7 +386,8 @@ async function doOpenFolder() {
   if (path && typeof path === "string") await loadFolder(path);
 }
 
-async function loadFolder(path: string) {
+async function loadFolder(picked: string) {
+  const path = projectRootFor(picked);
   folder = path;
   store = new ChatStore(path);
   currentFile = null;

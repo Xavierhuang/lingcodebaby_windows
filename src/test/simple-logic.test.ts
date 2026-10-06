@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   deriveTitle, groupByDay, foldTurns, adoptLegacy, paneLayout, outcomeOptions, kindBadge,
-  badgeForTarget, nativeRunText,
+  badgeForTarget, nativeRunText, projectRootFor,
 } from "../simple-logic.ts";
 
 test("a chat's title is its first user message, cut at a word boundary under 60 chars", () => {
@@ -109,4 +109,12 @@ test("an app in its own window says whether it is running, not 'No index.html'",
   assert.equal(nativeRunText("AURA_V1.exe", false).button, "▶ Run app");
   assert.match(nativeRunText("AURA_V1.exe", null, true).title, /^Starting AURA_V1\.exe/);
   for (const s of [true, false, null] as const) assert.doesNotMatch(JSON.stringify(nativeRunText("x", s)), /index\.html/);
+});
+
+test("picking a project's .lingcode folder opens the project itself", () => {
+  assert.equal(projectRootFor("C:\\Users\\a\\HC.LingCode.Demo\\.lingcode"), "C:\\Users\\a\\HC.LingCode.Demo");
+  assert.equal(projectRootFor("C:\\Users\\a\\HC.LingCode.Demo\\.lingcode\\"), "C:\\Users\\a\\HC.LingCode.Demo");
+  assert.equal(projectRootFor("/Users/a/site/.LingCode"), "/Users/a/site");
+  assert.equal(projectRootFor("C:\\Users\\a\\HC.LingCode.Demo"), "C:\\Users\\a\\HC.LingCode.Demo");
+  assert.equal(projectRootFor("C:\\work\\my.lingcode"), "C:\\work\\my.lingcode");
 });
