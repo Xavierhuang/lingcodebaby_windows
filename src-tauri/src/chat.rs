@@ -377,6 +377,19 @@ fn cli_too_old_hint(model: &str, stderr: &str, bundled: bool) -> Option<&'static
     })
 }
 
+/// Anthropic answers `403 Request not allowed` when it refuses the caller
+/// outright — usually an unsupported country/region (or a VPN exiting there),
+/// sometimes a blocked account. Only meaningful on the direct-Anthropic route
+/// (Default/Opus/Sonnet… via `claude login` or a personal key); LingModel goes
+/// through the LingCode proxy and is the way around it.
+fn anthropic_refused_hint(text: &str, direct_anthropic: bool) -> Option<&'static str> {
+    if direct_anthropic && text.contains("403") && text.contains("Request not allowed") {
+        Some("Anthropic refused this request — usually a region or account restriction, not a problem with LingCodeBaby. Switch the model to LingModel (uses your LingCode account), or turn off / change your VPN, then send again.")
+    } else {
+        None
+    }
+}
+
 /// Whether the CLI at `bin` accepts `--include-partial-messages`, read from its
 /// `--help` once per path per launch. A CLI that can't be asked (timeout,
 /// spawn error) is treated as not supporting it: the turn then runs without
@@ -490,6 +503,15 @@ mod model_tests {
         // An unrecognized DIFFERENT model is not this gate.
         assert!(cli_too_old_hint("opus55", r#"[claude-code:unrecognized_model] {"model":"deepseek-v4-pro"}"#, false).is_none());
         assert!(cli_too_old_hint("fable51", "something else", false).is_none());
+    }
+
+    #[test]
+    fn refused_hint_only_on_direct_anthropic_403() {
+        let err = "Failed to authenticate. API Error: 403 Request not allowed";
+        assert!(anthropic_refused_hint(err, true).unwrap().contains("LingModel"));
+        assert!(anthropic_refused_hint(err, false).is_none());
+        assert!(anthropic_refused_hint("API Error: 403 Your request was blocked.", true).is_none());
+        assert!(anthropic_refused_hint("API Error: 401 Invalid bearer token", true).is_none());
     }
 
     /// With the shipped CLI, `claude update` is the wrong advice: it cannot
@@ -611,23 +633,25 @@ pub async fn claude_send(
         std_cmd.env("QUINNY_BIN", dir.join(if cfg!(windows) { "quinny.exe" } else { "quinny" }));
     }
     // Endpoint routing priority (highest wins). Mirrors ClaudeChat.m:1462-1482.
-    //   1. Custom endpoint (BYO URL + x-api-key) — overrides everything.
+    //   1. Custom endpoint row (BYO URL + x-api-key).
     //   2. A DeepSeek row (DeepSeek's Anthropic-compatible endpoint + DeepSeek key).
     //   3. LingModel proxy (LingCode account bearer).
     //   4. Personal Anthropic API key from Keychain (env fallback for signed-out).
     //   5. Claude subscription (env unchanged — CLI uses `claude login`).
-    if crate::endpoint::is_active() {
+    let mut direct_anthropic = false;
+    if model == crate::endpoint::TAG {
         let prefs = crate::prefs::get_prefs();
+        if !crate::endpoint::is_active() {
+            return Err("The custom endpoint is off. Turn it on in LingCodeBaby → Custom Endpoint…, or pick another model.".to_string());
+        }
         let key = crate::endpoint::get_key()
             .ok_or_else(|| "Custom endpoint enabled but key is missing.".to_string())?;
         std_cmd.env("ANTHROPIC_BASE_URL", &prefs.custom_endpoint_url);
         std_cmd.env("ANTHROPIC_API_KEY", &key);
         std_cmd.env_remove("ANTHROPIC_AUTH_TOKEN");
-        // Only pass `--model` when the picker has a specific choice; LingModel
-        // routing is disabled here so lingmodel-tag falls back to letting the
-        // custom endpoint pick its default.
-        if model != LINGMODEL_TAG && model != "default" {
-            std_cmd.arg("--model").arg(cli_model_id(&model));
+        // No model set: the CLI's own default, which suits Anthropic itself.
+        if !prefs.custom_endpoint_model.is_empty() {
+            std_cmd.arg("--model").arg(&prefs.custom_endpoint_model);
         }
     } else if crate::deepseek_key::is_deepseek_model(&model) {
         // DeepSeek row: same CLI, DeepSeek's endpoint, the user's DeepSeek key
@@ -660,6 +684,7 @@ pub async fn claude_send(
             std_cmd.env("QUINNY_MODEL", LINGMODEL_UPSTREAM);
         }
     } else {
+        direct_anthropic = true;
         // Subscription path (`claude login`) — no env overrides — BUT if the
         // user has pasted a personal Anthropic key, hand it to the CLI so
         // signed-out users can still chat + run `quinny gen`. Env-set key
@@ -798,7 +823,12 @@ pub async fn claude_send(
             }
             Some("result") => {
                 let is_error = v.get("is_error").and_then(|b| b.as_bool()).unwrap_or(false);
-                let text = v.get("result").and_then(|r| r.as_str()).unwrap_or("");
+                let raw = v.get("result").and_then(|r| r.as_str()).unwrap_or("");
+                let text = match anthropic_refused_hint(raw, is_error && direct_anthropic) {
+                    Some(hint) => format!("{raw}\n\n{hint}"),
+                    None => raw.to_string(),
+                };
+                let text = text.as_str();
                 if let Some((question, options)) = parse_ask_user(text) {
                     let _ = on_event
                         .send(json!({ "kind": "ask_user", "question": question, "options": options }));

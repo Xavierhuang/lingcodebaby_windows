@@ -5,10 +5,16 @@
 // is already in the Keychain.
 //
 // Storage lives in endpoint.rs (URL in prefs.json, key in Keychain).
+//
+// A saved endpoint is its own model-picker row; Save selects it and Turn Off
+// removes it. Either one fires ENDPOINT_CHANGED so the picker can catch up,
+// whoever opened the sheet.
 
 import { api } from "./api";
 
 const OVERLAY_CLASS = "modal-overlay";
+export const ENDPOINT_CHANGED = "lcb-endpoint-changed";
+const changed = () => window.dispatchEvent(new Event(ENDPOINT_CHANGED));
 
 /** Open the custom-endpoint sheet. Resolves when it closes. */
 export async function showEndpointSheet(): Promise<void> {
@@ -26,8 +32,8 @@ export async function showEndpointSheet(): Promise<void> {
         </div>
         <div class="endpoint-hint">
           The endpoint must accept <code>/v1/messages</code> with an
-          <code>x-api-key</code> header. This overrides Claude subscription
-          and LingModel.
+          <code>x-api-key</code> header. Once saved it shows up as its own
+          choice in the model picker.
         </div>
         <label class="endpoint-row">
           <span class="endpoint-label">Base URL</span>
@@ -38,6 +44,10 @@ export async function showEndpointSheet(): Promise<void> {
           <input class="endpoint-key" type="password" placeholder="sk-ant-… (leave empty to keep the stored key)">
         </label>
         <div class="endpoint-key-status"></div>
+        <label class="endpoint-row">
+          <span class="endpoint-label">Model</span>
+          <input class="endpoint-model" type="text" placeholder="optional, e.g. kimi-k2 (blank = the endpoint's default)">
+        </label>
         <div class="endpoint-error" role="alert"></div>
         <div class="modal-buttons endpoint-buttons">
           <button class="endpoint-off">Turn Off</button>
@@ -50,6 +60,7 @@ export async function showEndpointSheet(): Promise<void> {
 
     const urlIn  = overlay.querySelector<HTMLInputElement>(".endpoint-url")!;
     const keyIn  = overlay.querySelector<HTMLInputElement>(".endpoint-key")!;
+    const modelIn = overlay.querySelector<HTMLInputElement>(".endpoint-model")!;
     const status = overlay.querySelector<HTMLElement>(".endpoint-key-status")!;
     const errEl  = overlay.querySelector<HTMLElement>(".endpoint-error")!;
     const saveBn = overlay.querySelector<HTMLButtonElement>(".endpoint-save")!;
@@ -57,6 +68,7 @@ export async function showEndpointSheet(): Promise<void> {
     const cxBn   = overlay.querySelector<HTMLButtonElement>(".endpoint-cancel")!;
 
     urlIn.value = cfg.url;
+    modelIn.value = cfg.model;
     status.textContent = cfg.key_present
       ? "•••• stored (leave blank to keep it)"
       : "no key stored yet";
@@ -74,6 +86,7 @@ export async function showEndpointSheet(): Promise<void> {
     offBn.onclick = async () => {
       try {
         await api.endpointDisable();
+        changed();
         close();
       } catch (e) {
         errEl.textContent = String(e);
@@ -89,7 +102,8 @@ export async function showEndpointSheet(): Promise<void> {
         return;
       }
       try {
-        await api.endpointSaveConfig(url, key, true);
+        await api.endpointSaveConfig(url, key, true, modelIn.value.trim());
+        changed();
         close();
       } catch (e) {
         errEl.textContent = String(e);

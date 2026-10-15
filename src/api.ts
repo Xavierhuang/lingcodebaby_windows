@@ -6,6 +6,8 @@ export interface Prefs {
   play_sounds: boolean;
   use_custom_endpoint: boolean;
   custom_endpoint_url: string;
+  custom_endpoint_model?: string;
+  custom_endpoint_row_seen?: boolean;
   onboarding_complete: boolean;
   appearance: string;
   remote_access?: boolean;
@@ -19,7 +21,8 @@ export interface RunTarget {
   command: string | null;
   path: string | null;
 }
-export interface EndpointConfig { enabled: boolean; url: string; key_present: boolean; }
+/** `label` is the model-picker row text for the endpoint (model "custom"). */
+export interface EndpointConfig { enabled: boolean; url: string; key_present: boolean; model: string; label: string; }
 
 /** One rendered transcript row, as persisted. `clean` mirrors the Mac
  *  thinkingOnly flag inverted: clean rows are always shown, the rest only with
@@ -107,8 +110,8 @@ export const api = {
 
   // Custom Anthropic-compatible endpoint (URL + key config sheet).
   endpointGetConfig: () => invoke<EndpointConfig>("endpoint_get_config"),
-  endpointSaveConfig: (url: string, key: string, enabled: boolean) =>
-    invoke<void>("endpoint_save_config", { url, key, enabled }),
+  endpointSaveConfig: (url: string, key: string, enabled: boolean, model: string) =>
+    invoke<void>("endpoint_save_config", { url, key, enabled, model }),
   endpointDisable: () => invoke<void>("endpoint_disable"),
 };
 

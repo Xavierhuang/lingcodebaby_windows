@@ -12,7 +12,7 @@ fn default_appearance() -> String {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Prefs {
-    pub model: String,       // "lingmodel" | "default" | "opus" | "opus55" | "sonnet" | "fable51" | "fable" | "haiku" | "deepseek-v4-pro" | "deepseek-v4-flash"
+    pub model: String,       // "lingmodel" | "custom" | "default" | "opus" | "opus55" | "sonnet" | "fable51" | "fable" | "haiku" | "deepseek-v4-pro" | "deepseek-v4-flash"
     pub play_sounds: bool,
     /// Custom endpoint state — the API key itself is in the OS Keychain
     /// (endpoint.rs), never in this JSON. Mirrors Mac ClaudeChat.m's
@@ -21,6 +21,14 @@ pub struct Prefs {
     pub use_custom_endpoint: bool,
     #[serde(default)]
     pub custom_endpoint_url: String,
+    /// Model id sent to the custom endpoint (`--model`); empty = the endpoint's
+    /// own default.
+    #[serde(default)]
+    pub custom_endpoint_model: String,
+    /// The endpoint used to override every picker row; it is now its own row
+    /// (model "custom"). Set once the one-time move onto that row has run.
+    #[serde(default)]
+    pub custom_endpoint_row_seen: bool,
     /// Sticky flag set once the user has cleared the first-run onboarding
     /// gate. `false` on a fresh install → gate is shown on launch. Mirrors
     /// LCBOnboarding's "shown once" NSUserDefaults flag.
@@ -50,6 +58,8 @@ impl Default for Prefs {
             play_sounds: true,
             use_custom_endpoint: false,
             custom_endpoint_url: String::new(),
+            custom_endpoint_model: String::new(),
+            custom_endpoint_row_seen: false,
             onboarding_complete: false,
             appearance: default_appearance(),
             remote_access: false,

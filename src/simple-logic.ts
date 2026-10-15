@@ -138,7 +138,9 @@ export function outcomeOptions(names: Record<string, string>): OutcomeGroup[] {
   const tiers: Array<[string, string]> = [["opus55", "Best quality"], ["sonnet", "Fast"], ["haiku", "Cheap"]];
   const primary: OutcomeOption[] = [];
   if (names.lingmodel) primary.push({ value: "lingmodel", label: names.lingmodel });
-  const used = new Set<string>(["lingmodel"]);
+  // The user's own endpoint, when saved: they set it up to use it.
+  if (names.custom) primary.push({ value: "custom", label: names.custom });
+  const used = new Set<string>(["lingmodel", "custom"]);
   for (const [value, tier] of tiers) {
     if (!names[value]) continue;
     used.add(value);

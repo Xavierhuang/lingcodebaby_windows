@@ -11,7 +11,7 @@ import { PANE, badgeForTarget, nativeRunText, paneLayout, projectRootFor } from 
 import { runDeploy } from "./deploy";
 import { checkForUpdates } from "./updater";
 import { alertDialog, promptText, confirmDialog } from "./ui";
-import { showEndpointSheet } from "./endpoint";
+import { showEndpointSheet, ENDPOINT_CHANGED } from "./endpoint";
 import { showOnboarding, showOnboardingIfNeeded } from "./onboarding";
 import { connectBackendToFolder, openBackendConsole } from "./cloud";
 import { Appearance, applyAppearance, isDark, onAppearanceChange } from "./theme";
@@ -74,6 +74,19 @@ const tree = new FileTree(panel.treeHost);
 const editor = new CodeEditor(panel.editorHost, isDark());
 
 chat.setModelOptions(MODEL_NAMES, currentModel);
+
+// The custom endpoint's row exists only while one is saved. endpoint.rs moves
+// prefs.model onto it on Save and off it on Turn Off, so follow prefs here.
+async function refreshEndpointRow(followPrefs: boolean) {
+  try {
+    const ep = await api.endpointGetConfig();
+    const names = ep.enabled && ep.key_present ? { ...MODEL_NAMES, custom: ep.label } : MODEL_NAMES;
+    if (followPrefs) currentModel = (await api.getPrefs()).model;
+    chat.setModelOptions(names, currentModel);
+  } catch { /* outside Tauri the static list stands */ }
+}
+window.addEventListener(ENDPOINT_CHANGED, () => { void refreshEndpointRow(true); });
+
 function setModel(m: string, persist = true) {
   currentModel = m;
   chat.setCurrentModel(m);
@@ -599,6 +612,7 @@ conversations.setProject(null);
   try {
     const prefs = await api.getPrefs();
     setModel(prefs.model, false);
+    await refreshEndpointRow(false);
     chat.playSounds = prefs.play_sounds;
     setAppearance((prefs.appearance || "system") as Appearance, false);
   } catch { /* defaults are fine */ }

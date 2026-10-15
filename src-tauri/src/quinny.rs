@@ -61,15 +61,18 @@ pub fn locate(app: &AppHandle) -> Option<PathBuf> {
 /// Also strips ANSI color (matches Mac's NO_COLOR/TERM=dumb from
 /// FileBrowser.m:557-559) and hides the console window on Windows.
 fn apply_lingmodel_env(cmd: &mut std::process::Command) {
-    // Endpoint priority mirrors chat.rs: custom endpoint > LingModel >
+    // Endpoint priority mirrors chat.rs: custom endpoint row > LingModel >
     // personal Anthropic key from Keychain. `quinny gen`/`build`/`verify` hit
     // the LLM directly (not through `claude`), so quinny needs the same env.
-    if crate::endpoint::is_active() {
+    if crate::endpoint::is_selected() {
         let prefs = crate::prefs::get_prefs();
         if let Some(key) = crate::endpoint::get_key() {
             cmd.env("ANTHROPIC_BASE_URL", &prefs.custom_endpoint_url);
             cmd.env("ANTHROPIC_API_KEY", key);
             cmd.env_remove("ANTHROPIC_AUTH_TOKEN");
+            if !prefs.custom_endpoint_model.is_empty() {
+                cmd.env("QUINNY_MODEL", &prefs.custom_endpoint_model);
+            }
         }
     } else if let Some(tok) = crate::deploy::deploy_get_saved_token() {
         cmd.env("ANTHROPIC_BASE_URL", crate::deploy::lingmodel_anthropic_base_url());

@@ -43,7 +43,7 @@ export async function invoke<T>(cmd: string, args: any = {}): Promise<T> {
     case "cloud_autoconnect_backend": return false as T;
     case "scaffold_agent_files": return null as T;
     case "anthropic_key_present": case "deepseek_key_present": return false as T;
-    case "endpoint_get_config": return ({ enabled: false, url: "", key_present: false }) as T;
+    case "endpoint_get_config": return ({ enabled: false, url: "", key_present: false, model: "", label: "Custom · endpoint" }) as T;
     case "claude_abort": return undefined as T;
     case "claude_send": {
       const ch = a.onEvent as Channel<any>;

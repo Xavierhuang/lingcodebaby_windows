@@ -25,6 +25,20 @@ struct MenuState {
     window_count: AtomicUsize,
 }
 
+/// Bring the native model menu in line with a saved / switched-off custom
+/// endpoint: the row's text and availability, and which row is checked.
+pub(crate) fn sync_custom_endpoint_row(app: &tauri::AppHandle) {
+    let Some(state) = app.try_state::<MenuState>() else { return };
+    let prefs = prefs::get_prefs();
+    if let Some(item) = state.models.get(endpoint::TAG) {
+        let _ = item.set_text(endpoint::row_label(&prefs.custom_endpoint_url, &prefs.custom_endpoint_model));
+        let _ = item.set_enabled(prefs.use_custom_endpoint);
+    }
+    for (key, item) in state.models.iter() {
+        let _ = item.set_checked(*key == prefs.model);
+    }
+}
+
 fn build_menu(app: &tauri::AppHandle, prefs: &prefs::Prefs) -> tauri::Result<(Menu<Wry>, MenuState)> {
     // Application menu — mirrors the Mac app menu (AppDelegate.setupMenu): the
     // auth-path items (API key, custom endpoint, sign out) live here rather than
@@ -110,6 +124,13 @@ fn build_menu(app: &tauri::AppHandle, prefs: &prefs::Prefs) -> tauri::Result<(Me
     // DeepSeek rows run the same CLI against DeepSeek's endpoint (deepseek_key).
     let m_deepseek_pro = mk_model(deepseek_key::MENU_ROWS[0].0, deepseek_key::MENU_ROWS[0].1)?;
     let m_deepseek_flash = mk_model(deepseek_key::MENU_ROWS[1].0, deepseek_key::MENU_ROWS[1].1)?;
+    // The custom endpoint's own row; greyed out until one is saved
+    // (`sync_custom_endpoint_row` keeps it current).
+    let m_custom = mk_model(
+        endpoint::TAG,
+        &endpoint::row_label(&prefs.custom_endpoint_url, &prefs.custom_endpoint_model),
+    )?;
+    m_custom.set_enabled(prefs.use_custom_endpoint)?;
     let model_menu = Submenu::with_items(
         app,
         "Claude Model",
@@ -125,6 +146,7 @@ fn build_menu(app: &tauri::AppHandle, prefs: &prefs::Prefs) -> tauri::Result<(Me
             &m_haiku,
             &m_deepseek_pro,
             &m_deepseek_flash,
+            &m_custom,
         ],
     )?;
 
@@ -213,6 +235,11 @@ fn build_menu(app: &tauri::AppHandle, prefs: &prefs::Prefs) -> tauri::Result<(Me
     models.insert("sonnet".to_string(), m_sonnet);
     models.insert("fable".to_string(), m_fable);
     models.insert("haiku".to_string(), m_haiku);
+    models.insert("opus55".to_string(), m_opus55);
+    models.insert("fable51".to_string(), m_fable51);
+    models.insert(deepseek_key::MENU_ROWS[0].0.to_string(), m_deepseek_pro);
+    models.insert(deepseek_key::MENU_ROWS[1].0.to_string(), m_deepseek_flash);
+    models.insert(endpoint::TAG.to_string(), m_custom);
 
     let mut appearances = HashMap::new();
     appearances.insert("system".to_string(), a_system);
@@ -257,6 +284,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .manage(chat::ChatState::default())
         .setup(|app| {
+            endpoint::migrate_to_row();
             let prefs = prefs::get_prefs();
             let (menu, menu_state) = build_menu(app.handle(), &prefs)?;
             app.set_menu(menu)?;
