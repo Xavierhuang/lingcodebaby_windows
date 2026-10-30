@@ -442,6 +442,20 @@ fn text_delta(v: &Value) -> Option<&str> {
 }
 
 #[cfg(test)]
+mod stream_end_tests {
+    use super::stream_ended_early;
+
+    #[test]
+    fn only_a_started_unfinished_unstopped_turn_counts_as_dropped() {
+        assert!(stream_ended_early(false, false, false, "sess"));
+        assert!(!stream_ended_early(true, false, false, "sess"), "had a result");
+        assert!(!stream_ended_early(false, true, false, "sess"), "paused on a question");
+        assert!(!stream_ended_early(false, false, true, "sess"), "user pressed Stop");
+        assert!(!stream_ended_early(false, false, false, ""), "never started");
+    }
+}
+
+#[cfg(test)]
 mod delta_tests {
     use super::*;
 
@@ -544,6 +558,14 @@ fn prompt_with_attachments(base: &str, attachments: &[String]) -> String {
         prompt.push('\n');
     }
     prompt
+}
+
+/// A turn whose session started but never reached a `result` line, and that
+/// was neither stopped by the user nor paused on a question. A CLI that fails
+/// before its first line (bad flag, missing auth) has no session and is left to
+/// the stderr path.
+fn stream_ended_early(saw_result: bool, interrupted: bool, aborted: bool, session: &str) -> bool {
+    !saw_result && !interrupted && !aborted && !session.is_empty()
 }
 
 #[tauri::command]
@@ -729,6 +751,7 @@ pub async fn claude_send(
 
     let mut reader = BufReader::new(stdout).lines();
     let mut interrupted = false; // AskUserQuestion ends the turn early
+    let mut saw_result = false;
     let mut stderr_buf = String::new();
     // Every stream_event carries the session id; only report it when it changes.
     let mut last_session = String::new();
@@ -822,6 +845,7 @@ pub async fn claude_send(
                 }
             }
             Some("result") => {
+                saw_result = true;
                 let is_error = v.get("is_error").and_then(|b| b.as_bool()).unwrap_or(false);
                 let raw = v.get("result").and_then(|r| r.as_str()).unwrap_or("");
                 let text = match anthropic_refused_hint(raw, is_error && direct_anthropic) {
@@ -853,12 +877,27 @@ pub async fn claude_send(
         }
     }
 
-    // Clear / kill the stored child.
-    {
+    // Clear / kill the stored child. An empty slot means claude_abort took it.
+    let aborted = {
         let mut guard = state.child.lock().await;
-        if let Some(mut c) = guard.take() {
-            let _ = c.start_kill();
+        match guard.take() {
+            Some(mut c) => {
+                let _ = c.start_kill();
+                false
+            }
+            None => true,
         }
+    };
+
+    if stream_ended_early(saw_result, interrupted, aborted, &last_session) {
+        // The session started but the CLI died before its result line (a
+        // dropped connection the CLI didn't report). Say so in the shape the
+        // frontend already resumes from.
+        let _ = on_event.send(json!({
+            "kind": "result",
+            "text": "Connection stopped (stream ended early)",
+            "is_error": true
+        }));
     }
 
     if interrupted {

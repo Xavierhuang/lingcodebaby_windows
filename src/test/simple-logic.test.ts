@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   deriveTitle, groupByDay, foldTurns, adoptLegacy, paneLayout, outcomeOptions, kindBadge,
-  badgeForTarget, nativeRunText, projectRootFor,
+  badgeForTarget, nativeRunText, projectRootFor, isTransientError,
 } from "../simple-logic.ts";
 
 test("a chat's title is its first user message, cut at a word boundary under 60 chars", () => {
@@ -117,4 +117,31 @@ test("picking a project's .lingcode folder opens the project itself", () => {
   assert.equal(projectRootFor("/Users/a/site/.LingCode"), "/Users/a/site");
   assert.equal(projectRootFor("C:\\Users\\a\\HC.LingCode.Demo"), "C:\\Users\\a\\HC.LingCode.Demo");
   assert.equal(projectRootFor("C:\\work\\my.lingcode"), "C:\\work\\my.lingcode");
+});
+
+test("status lines and resume notes fold in with the turn's steps", () => {
+  const folds = foldTurns([
+    { kind: "user", text: "a" },
+    { kind: "status", text: "Reading the page first." },
+    { kind: "tool", text: "🔧 Read index.html" },
+    { kind: "note", text: "Connection dropped after step 1 — resuming automatically (1/3)…" },
+    { kind: "status", text: "Picking up where I left off." },
+    { kind: "edit", text: "✏️ Edit index.html\n+ x" },
+    { kind: "assistant", text: "done" },
+  ]);
+  assert.equal(folds.length, 1);
+  assert.deepEqual([folds[0].start, folds[0].end], [1, 5]);
+  assert.equal(folds[0].summary, "Edited 1 file · Ran 1 command");
+});
+
+test("only network and upstream hiccups are resumed automatically", () => {
+  assert.ok(isTransientError("API Error: Connection stopped (ECONNRESET)"));
+  assert.ok(isTransientError("API Error: Connection error."));
+  assert.ok(isTransientError("API Error: 529 {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\"}}"));
+  assert.ok(isTransientError("API Error: 502 Bad Gateway"));
+  assert.ok(isTransientError("Connection stopped (stream ended early)"));
+  assert.ok(!isTransientError("API Error: 401 Invalid API key"));
+  assert.ok(!isTransientError("API Error: 403 forbidden"));
+  assert.ok(!isTransientError("Credit balance is too low"));
+  assert.ok(!isTransientError("I couldn't find that file."));
 });

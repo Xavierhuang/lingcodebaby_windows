@@ -1,15 +1,16 @@
 import { claudeSend, ChatEvent, api } from "./api";
-import { ChatDoc, foldTurns, outcomeOptions } from "./simple-logic";
+import { ChatDoc, foldTurns, outcomeOptions, isTransientError, CONTINUE_PROMPT, RETRY_DELAYS_MS } from "./simple-logic";
 import { ChatStore, titleFor } from "./conversations";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { alertDialog } from "./ui";
 
-/** Row kinds that survive a save/restore round-trip. Mirrors LCBBubbleKind. */
-type Kind = "user" | "assistant" | "note" | "thinking" | "tool" | "edit";
+/** Row kinds that survive a save/restore round-trip. Mirrors LCBBubbleKind,
+ *  plus "status": what the agent says between steps ("Now updating the CSS"). */
+type Kind = "user" | "assistant" | "note" | "thinking" | "tool" | "edit" | "status";
 
 interface Entry {
   el: HTMLElement;
-  clean: boolean;   // shown even with "Show all steps" off
+  clean: boolean;   // shown even with "Show Claude Thinking" off
   kind: Kind;
   text: string;     // plain text, so the row can be re-rendered on restore
 }
@@ -52,6 +53,16 @@ export class ChatPanel {
   private session: string | null = null;
   private busy = false;
   private interrupted = false;
+  /** Stop was pressed; no automatic resume may follow. */
+  private stopped = false;
+  /** The error the current attempt ended with, if any. */
+  private turnError: string | null = null;
+  /** Commands and edits so far in this turn, for the thinking line and the
+   *  "dropped after step N" note. */
+  private turnSteps = 0;
+  /** Wakes a resume backoff early when Stop is pressed. */
+  private wakeBackoff: (() => void) | null = null;
+  private saveTimer: number | null = null;
   private root: string | null = null;
   private store: ChatStore | null = null;
   private doc: ChatDoc | null = null;
@@ -75,8 +86,6 @@ export class ChatPanel {
    *  whole-block "text"/"result" events that follow are the record. */
   private liveEl: HTMLElement | null = null;
   private liveText = "";
-  /** The live block got its closing "text" event; the next delta starts a new one. */
-  private liveClosed = false;
   private entries: Entry[] = [];
   private lastAssistantText = "";
   private lastWrittenPath: string | null = null;
@@ -293,7 +302,13 @@ export class ChatPanel {
     this.onTranscriptChange();
   }
 
+  private scheduleSave() {
+    if (this.saveTimer !== null) return;
+    this.saveTimer = window.setTimeout(() => { this.saveTimer = null; void this.saveHistory(); }, 1500);
+  }
+
   private async saveHistory() {
+    if (this.saveTimer !== null) { clearTimeout(this.saveTimer); this.saveTimer = null; }
     if (!this.store || !this.doc || !this.entries.length) return;
     const doc: ChatDoc = {
       ...this.doc,
@@ -347,7 +362,7 @@ export class ChatPanel {
   /** Fold each finished turn's steps behind one summary line (Mac TranscriptTurnSummary). */
   private applyFolds() {
     this.transcript.querySelectorAll(".turn-summary").forEach((el) => el.remove());
-    for (const e of this.entries) e.el.style.display = (this.showThinking || e.clean) ? "" : "none";
+    for (const e of this.entries) e.el.style.display = this.isShown(e.kind, e.clean) ? "" : "none";
     if (this.showAllSteps) return;
     const folds = foldTurns(this.entries.map((e) => ({ kind: e.kind, text: e.text })));
     for (const f of folds) {
@@ -363,6 +378,13 @@ export class ChatPanel {
   }
 
   // ---- transcript ---------------------------------------------------------
+
+  /** Commands and status lines always show, so a turn can be watched and
+   *  stopped as it goes; only the model's raw reasoning waits for
+   *  View → Show Claude Thinking. Finished turns fold in applyFolds. */
+  private isShown(kind: Kind, clean: boolean) {
+    return clean || kind === "tool" || kind === "status" || this.showThinking;
+  }
 
   postNote(text: string) {
     this.append(text, "note", true);
@@ -388,14 +410,17 @@ export class ChatPanel {
     }
     if (kind === "edit") {
       el.appendChild(renderDiff(text));
-    } else if (kind === "assistant") {
+    } else if (kind === "assistant" || kind === "status") {
       el.appendChild(linkify(text));
     } else {
       el.appendChild(document.createTextNode(text));
     }
-    el.style.display = (this.showThinking || clean) ? "" : "none";
+    el.style.display = this.isShown(kind, clean) ? "" : "none";
     this.transcript.insertBefore(el, this.dotsAnchor());
     this.entries.push({ el, clean, kind, text });
+    // Keep the chat file current while a turn runs, so a crash or a dropped
+    // connection never loses how far it got.
+    if (live && this.busy) this.scheduleSave();
     if (live) {
       // Only live, visible rows pop in; a restored history appears at rest.
       if (pop && el.style.display !== "none") {
@@ -539,17 +564,44 @@ export class ChatPanel {
     this.input.style.height = "auto";
     this.setBusy(true);
     this.interrupted = false;
+    this.stopped = false;
+    this.turnSteps = 0;
     this.lastAssistantText = "";
     this.lastWrittenPath = null;
     this.startThinkingLine();
 
     try {
-      await claudeSend(
-        { message, cwd, model: this.getModel(), resume: this.session, attachments },
-        (e) => this.handleEvent(e)
-      );
-    } catch (err) {
-      this.append("Claude error: " + String(err), "note", true);
+      // A dropped connection resumes the same CLI session a few times on its
+      // own; everything the agent already did is in that session.
+      let prompt = message;
+      let files = attachments;
+      for (let attempt = 0; ; attempt++) {
+        this.turnError = null;
+        try {
+          await claudeSend(
+            { message: prompt, cwd, model: this.getModel(), resume: this.session, attachments: files },
+            (e) => this.handleEvent(e)
+          );
+        } catch (err) {
+          this.turnError = String(err);
+        }
+        const err = this.turnError;
+        if (err === null || this.stopped) break;
+        if (!isTransientError(err)) {
+          this.append("Claude error: " + err, "note", true);
+          break;
+        }
+        if (attempt >= RETRY_DELAYS_MS.length) {
+          this.append(`Claude error: ${err}\nStill can't reach the model after ${attempt} tries. Everything up to step ${this.turnSteps} is kept — press Continue to pick up from there.`, "note", true);
+          this.offerContinue();
+          break;
+        }
+        this.append(`Connection dropped after step ${this.turnSteps} (${shortError(err)}) — resuming automatically (${attempt + 1}/${RETRY_DELAYS_MS.length})…`, "note", true);
+        await this.backoff(RETRY_DELAYS_MS[attempt]);
+        if (this.stopped) break;
+        // Without a session nothing ran yet, so the original request is resent.
+        if (this.session) { prompt = CONTINUE_PROMPT; files = []; }
+      }
     } finally {
       this.endLive();
       this.stopThinkingLine();
@@ -574,6 +626,24 @@ export class ChatPanel {
     void this.send(next.text);
   }
 
+  /** Wait before a resume; Stop wakes it early. */
+  private backoff(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      const t = window.setTimeout(() => { this.wakeBackoff = null; resolve(); }, ms);
+      this.wakeBackoff = () => { clearTimeout(t); this.wakeBackoff = null; resolve(); };
+    });
+  }
+
+  /** The automatic resumes gave up: one button continues the same session. */
+  private offerContinue() {
+    this.clearOptions();
+    const btn = document.createElement("button");
+    btn.className = "opt continue";
+    btn.textContent = "Continue";
+    btn.onclick = () => { this.clearOptions(); void this.send(CONTINUE_PROMPT); };
+    this.optionsEl.appendChild(btn);
+  }
+
   private handleEvent(e: ChatEvent) {
     switch (e.kind) {
       case "session": this.session = e.id; break;
@@ -585,24 +655,20 @@ export class ChatPanel {
         this.append(`🧠 ${e.text}`, "thinking", false);
         break;
       case "text":
+        // The streamed row becomes a status line in place; if it turns out to
+        // be the final answer, "result" promotes it.
         this.lastAssistantText = e.text;
-        // The live row stays up as the answer-so-far until the next step or
-        // the result replaces it. With steps shown, the step row is that copy.
-        if (this.liveEl && !this.showThinking) {
-          this.liveText = e.text;
-          this.liveEl.textContent = e.text;
-          this.liveClosed = true;
-        } else {
-          this.endLive();
-        }
-        this.append(e.text, "thinking", false);
+        this.endLive();
+        this.append(e.text, "status", false, undefined, true, false);
         break;
       case "tool":
         this.endLive();
+        this.turnSteps++;
         this.append(`🔧 ${e.name} ${e.detail}`, "tool", false);
         break;
       case "edit": {
         this.endLive();
+        this.turnSteps++;
         const file = e.input?.file_path || e.input?.path;
         if (typeof file === "string" && file) this.lastWrittenPath = file;
         this.append(this.renderEdit(e.name, e.input), "edit", true);
@@ -616,19 +682,19 @@ export class ChatPanel {
         this.onAskUser();
         break;
       case "result": {
-        // A final answer that is what we just streamed replaces the live row
-        // in place, without popping in a second time.
-        const streamed = this.liveText.trim();
         this.endLive();
-        const pop = (t: string) => t.trim() !== streamed;
         if (e.is_error) {
-          this.append("Claude error: " + e.text, "note", true);
-        } else if (e.text && e.text.trim() && e.text.trim() !== this.lastAssistantText.trim()) {
-          this.append(e.text, "assistant", true, "Claude", true, pop(e.text));
-        } else if (this.lastAssistantText.trim()) {
-          // Promote the streamed text to a final answer.
-          this.append(this.lastAssistantText, "assistant", true, "Claude", true, pop(this.lastAssistantText));
+          // send() decides: resume on a dropped connection, or show it.
+          this.turnError = e.text || "Unknown error";
+          break;
         }
+        const last = this.lastAssistantText.trim();
+        const answer = e.text && e.text.trim() ? e.text : this.lastAssistantText;
+        // The final answer replaces its own status line rather than repeating it.
+        const tail = this.entries[this.entries.length - 1];
+        const promote = !!tail && tail.kind === "status" && tail.text.trim() === answer.trim();
+        if (promote) { tail.el.remove(); this.entries.pop(); }
+        if (answer.trim()) this.append(answer, "assistant", true, "Claude", true, !promote && answer.trim() !== last);
         this.onFilesModified();
         break;
       }
@@ -636,7 +702,7 @@ export class ChatPanel {
         this.interrupted = true;
         break;
       case "done":
-        if (!this.interrupted && this.playSounds) beep(660);
+        if (!this.interrupted && !this.turnError && this.playSounds) beep(660);
         if (e.stderr && this.transcript.childElementCount === 0) {
           this.append("Claude exited without output. " + e.stderr, "note", true);
         }
@@ -695,14 +761,16 @@ export class ChatPanel {
 
   abort() {
     if (!this.busy) return;
+    this.stopped = true;
+    this.wakeBackoff?.();
     api.claudeAbort();
-    this.append("Stopped.", "note", true);
+    this.append("Stopped. Type a correction and send it — the agent continues in the same session, with everything done so far.", "note", true);
+    this.input.focus();
   }
 
   /** Grow the live reply by one token chunk. It sits above the thinking dots,
    *  so the dots keep running under the text while the turn continues. */
   private streamDelta(chunk: string) {
-    if (this.liveClosed) this.endLive();
     if (!this.liveEl) {
       this.liveEl = document.createElement("div");
       this.liveEl.className = "msg assistant streaming pop";
@@ -729,7 +797,6 @@ export class ChatPanel {
     this.liveEl?.remove();
     this.liveEl = null;
     this.liveText = "";
-    this.liveClosed = false;
   }
 
   private startThinkingLine() {
@@ -745,7 +812,8 @@ export class ChatPanel {
     const tick = () => {
       if (!this.thinkingLine) return;
       const s = Math.floor((Date.now() - this.thinkStart) / 1000);
-      label.textContent = s > 0 ? `Thinking… ${s}s` : "Thinking…";
+      const steps = this.turnSteps ? ` · step ${this.turnSteps}` : "";
+      label.textContent = (s > 0 ? `Thinking… ${s}s` : "Thinking…") + steps;
       this.scrollEl.scrollTop = this.scrollEl.scrollHeight;
     };
     tick();
@@ -757,6 +825,12 @@ export class ChatPanel {
     this.thinkingLine?.remove();
     this.thinkingLine = null;
   }
+}
+
+/** The gist of a CLI error for a one-line note ("ECONNRESET", "529"). */
+function shortError(text: string): string {
+  const m = text.match(/\bE[A-Z]{4,}\b/) || text.match(/\b(429|5\d\d)\b|socket hang up|stream ended early|overloaded/i);
+  return m ? m[0] : "network error";
 }
 
 /** Colour a stored diff body per line (`+` added, `-` removed, header cyan). */

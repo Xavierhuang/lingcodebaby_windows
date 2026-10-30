@@ -33,7 +33,7 @@ export function showSettings(state: SettingsState, actions: SettingsActions): Pr
         <div class="settings-row"><span class="k">Appearance</span>
           <select class="field appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
         <div class="settings-row"><span class="k">Sounds</span><label><input type="checkbox" class="sounds"/> Chime when Claude finishes or asks</label></div>
-        <div class="settings-row"><span class="k">Transcript</span><label><input type="checkbox" class="steps"/> Show all steps (every command and edit)</label></div>
+        <div class="settings-row"><span class="k">Transcript</span><label><input type="checkbox" class="steps"/> Keep steps expanded after a turn</label></div>
         <div class="settings-row"><span class="k">Remote access</span><label><input type="checkbox" class="remote"/> Chat with this PC's agent from lingcode.dev/remote</label></div>
         <div class="settings-row"><span class="k"></span><span class="faint remote-status"></span></div>
         <div class="settings-actions">

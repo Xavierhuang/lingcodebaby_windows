@@ -70,7 +70,7 @@ export function foldTurns(rows: StoredRow[]): Fold[] {
   while (i < rows.length) {
     if (rows[i].kind !== "user") { i++; continue; }
     let j = i + 1;
-    while (j < rows.length && (rows[j].kind === "tool" || rows[j].kind === "edit" || rows[j].kind === "thinking" || rows[j].kind === "note")) j++;
+    while (j < rows.length && (rows[j].kind === "tool" || rows[j].kind === "edit" || rows[j].kind === "thinking" || rows[j].kind === "status" || rows[j].kind === "note")) j++;
     const closed = j < rows.length && rows[j].kind === "assistant";
     const steps = rows.slice(i + 1, j).filter((r) => r.kind === "tool" || r.kind === "edit");
     if (closed && steps.length) {
@@ -84,6 +84,21 @@ export function foldTurns(rows: StoredRow[]): Fold[] {
     i = Math.max(j, i + 1);
   }
   return folds;
+}
+
+/** What the agent is told after a dropped connection; the `--resume`d session
+ *  holds everything it already did. */
+export const CONTINUE_PROMPT =
+  "The connection dropped. Continue exactly where you left off; don't redo finished steps.";
+
+/** Automatic resumes per turn before the user is handed a Continue button. */
+export const RETRY_DELAYS_MS = [2000, 5000, 10000];
+
+/** A failed turn worth resuming on its own: the network or the upstream
+ *  hiccupped, not a refusal, a bad key or a used-up quota. */
+export function isTransientError(text: string): boolean {
+  if (/\b(401|403|invalid api key|authentication|unauthori[sz]ed|forbidden|quota|credit balance|billing)\b/i.test(text)) return false;
+  return /ECONNRESET|ETIMEDOUT|ECONNREFUSED|EPIPE|socket hang up|connection (stopped|error|reset|closed)|stream ended early|fetch failed|network error|overloaded|\b(429|500|502|503|504|529)\b/i.test(text);
 }
 
 /** Legacy `<folder>/.lingcode/chat-baby.json` → the first chat of the new store, or null if empty. */

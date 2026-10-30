@@ -49,6 +49,18 @@ export async function invoke<T>(cmd: string, args: any = {}): Promise<T> {
       const ch = a.onEvent as Channel<any>;
       const say = (m: any, ms: number) => setTimeout(() => ch.onmessage(m), ms);
       say({ kind: "session", id: "mock-sess" }, 50);
+      // ?mockdrop=N: the first N turns die with ECONNRESET after a couple of
+      // steps, to exercise the automatic resume.
+      if (sendCount++ < Number(new URLSearchParams(location.search).get("mockdrop") || 0)) {
+        say({ kind: "text", text: "I'll look at the page first, then change the greeting." }, 200);
+        say({ kind: "tool", name: "Read", detail: "index.html" }, 400);
+        say({ kind: "tool", name: "Bash", detail: "npm run build" }, 700);
+        say({ kind: "result", text: "API Error: Connection stopped (ECONNRESET)", is_error: true }, 1000);
+        say({ kind: "done", stderr: "" }, 1050);
+        await new Promise((r) => setTimeout(r, 1100));
+        return undefined as T;
+      }
+      say({ kind: "text", text: "Picking up where I left off: editing the paragraph." }, 200);
       say({ kind: "tool", name: "Read", detail: "index.html" }, 300);
       say({ kind: "edit", name: "Edit", input: { file_path: `${FOLDER}/index.html`, old_string: "<p>Hello from the preview.</p>", new_string: "<p>Hello, world.</p>" } }, 700);
       const answer = "I changed the paragraph to say Hello, world. The preview reloads on its own, so you should see it right away.";
@@ -65,6 +77,8 @@ export async function invoke<T>(cmd: string, args: any = {}): Promise<T> {
     default: throw new Error(`mock: unhandled command ${cmd}`);
   }
 }
+
+let sendCount = 0;
 
 export function convertFileSrc(path: string): string {
   // Serve the in-memory index.html as a blob so the iframe has something to show.
