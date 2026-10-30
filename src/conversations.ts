@@ -107,7 +107,7 @@ export class ConversationsPane {
         <div class="conv-search"><input class="field" placeholder="Search chats" /></div>
         <div class="conv-project"><div class="label">Projects</div><div class="row"><span class="folder-icon">📁</span><span class="name"></span></div></div>
         <div class="conv-list"></div>
-        <div class="conv-foot">LingCodeBaby</div>
+        <div class="conv-foot">LingCodeBaby ${__APP_VERSION__}</div>
       </div>`;
     this.listEl = root.querySelector(".conv-list") as HTMLElement;
     this.projectEl = root.querySelector(".conv-project .name") as HTMLElement;

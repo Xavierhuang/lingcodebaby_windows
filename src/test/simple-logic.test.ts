@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   deriveTitle, groupByDay, foldTurns, adoptLegacy, paneLayout, outcomeOptions, kindBadge,
   badgeForTarget, nativeRunText, projectRootFor, isTransientError,
+  isMissingSession, silentExitMessage, recapPrompt,
 } from "../simple-logic.ts";
 
 test("a chat's title is its first user message, cut at a word boundary under 60 chars", () => {
@@ -144,4 +145,28 @@ test("only network and upstream hiccups are resumed automatically", () => {
   assert.ok(!isTransientError("API Error: 403 forbidden"));
   assert.ok(!isTransientError("Credit balance is too low"));
   assert.ok(!isTransientError("I couldn't find that file."));
+});
+
+test("a session the CLI can't reopen is recognised, and a silent exit says what it can", () => {
+  assert.ok(isMissingSession("No conversation found with session ID: 3f2a"));
+  assert.ok(!isMissingSession("API Error: Connection stopped (ECONNRESET)"));
+  assert.equal(silentExitMessage("", 1), "Stopped without replying (exit code 1). It printed no error.");
+  assert.match(silentExitMessage("boom\n", null), /no exit code\)\. boom$/);
+});
+
+test("a fresh session gets the questions and answers, newest first to survive the budget", () => {
+  const rows = [
+    { kind: "user", text: "old question" },
+    { kind: "tool", text: "🔧 Bash ls" },
+    { kind: "assistant", text: "old answer" },
+    { kind: "user", text: "newer question" },
+    { kind: "assistant", text: "newer answer" },
+  ];
+  const p = recapPrompt(rows, "do the thing");
+  assert.ok(p.includes("User: old question") && p.includes("Assistant: newer answer"));
+  assert.ok(!p.includes("Bash ls"), "steps are left out");
+  assert.ok(p.endsWith("do the thing"));
+  const tight = recapPrompt(rows, "go", 60);
+  assert.ok(tight.includes("newer answer") && !tight.includes("old question"));
+  assert.equal(recapPrompt([], "go"), "go");
 });

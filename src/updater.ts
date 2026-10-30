@@ -8,7 +8,7 @@ export async function checkForUpdates(silent: boolean) {
   try {
     const update = await check();
     if (!update) {
-      if (!silent) await alertDialog("You're on the latest version of LingCodeBaby.");
+      if (!silent) await alertDialog(`You're on the latest version of LingCodeBaby (${__APP_VERSION__}).`);
       return;
     }
     const ok = await confirmDialog(

@@ -48,6 +48,15 @@ export async function invoke<T>(cmd: string, args: any = {}): Promise<T> {
     case "claude_send": {
       const ch = a.onEvent as Channel<any>;
       const say = (m: any, ms: number) => setTimeout(() => ch.onmessage(m), ms);
+      // ?mockfail=nosession: a resumed turn dies the way the CLI does when its
+      // saved session is gone. ?mockfail=silent: it dies printing nothing.
+      const fail = new URLSearchParams(location.search).get("mockfail");
+      if (fail && a.resume && sendCount++ < 2) {
+        const stderr = fail === "nosession" ? `No conversation found with session ID: ${a.resume}` : "";
+        say({ kind: "done", stderr, code: 1 }, 300);
+        await new Promise((r) => setTimeout(r, 350));
+        return undefined as T;
+      }
       say({ kind: "session", id: "mock-sess" }, 50);
       // ?mockdrop=N: the first N turns die with ECONNRESET after a couple of
       // steps, to exercise the automatic resume.

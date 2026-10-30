@@ -127,7 +127,7 @@ export type ChatEvent =
   | { kind: "ask_user"; question: string; options: string[] }
   | { kind: "result"; text: string; is_error: boolean }
   | { kind: "awaiting" }
-  | { kind: "done"; stderr: string };
+  | { kind: "done"; stderr: string; code?: number | null };
 
 export function claudeSend(
   args: { message: string; cwd: string; model: string; resume: string | null; attachments: string[] },

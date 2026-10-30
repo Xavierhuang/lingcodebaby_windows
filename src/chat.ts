@@ -1,5 +1,8 @@
 import { claudeSend, ChatEvent, api } from "./api";
-import { ChatDoc, foldTurns, outcomeOptions, isTransientError, CONTINUE_PROMPT, RETRY_DELAYS_MS } from "./simple-logic";
+import {
+  ChatDoc, foldTurns, outcomeOptions, isTransientError, isMissingSession, silentExitMessage, recapPrompt,
+  CONTINUE_PROMPT, RETRY_DELAYS_MS,
+} from "./simple-logic";
 import { ChatStore, titleFor } from "./conversations";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { alertDialog } from "./ui";
@@ -60,6 +63,8 @@ export class ChatPanel {
   /** Commands and edits so far in this turn, for the thinking line and the
    *  "dropped after step N" note. */
   private turnSteps = 0;
+  /** The current attempt printed something (a token, a step, a result). */
+  private turnOutput = false;
   /** Wakes a resume backoff early when Stop is pressed. */
   private wakeBackoff: (() => void) | null = null;
   private saveTimer: number | null = null;
@@ -526,7 +531,9 @@ export class ChatPanel {
 
   // ---- turn ---------------------------------------------------------------
 
-  private async send(prefill?: string) {
+  /** `agentPrompt`, when given, is what the agent receives in place of the
+   *  echoed `prefill` (Continue, a fresh-session recap). */
+  private async send(prefill?: string, agentPrompt?: string) {
     const message = prefill ?? this.input.value.trim();
     const attachments = this.pendingAttachments;
     if (!message && !attachments.length) return;
@@ -573,10 +580,12 @@ export class ChatPanel {
     try {
       // A dropped connection resumes the same CLI session a few times on its
       // own; everything the agent already did is in that session.
-      let prompt = message;
+      let prompt = agentPrompt ?? message;
       let files = attachments;
+      let triedFresh = false;
       for (let attempt = 0; ; attempt++) {
         this.turnError = null;
+        this.turnOutput = false;
         try {
           await claudeSend(
             { message: prompt, cwd, model: this.getModel(), resume: this.session, attachments: files },
@@ -587,13 +596,26 @@ export class ChatPanel {
         }
         const err = this.turnError;
         if (err === null || this.stopped) break;
+        if (isMissingSession(err) && this.session && !triedFresh) {
+          // The saved session is gone or unreadable; keep the chat going in a
+          // new one rather than leaving it dead.
+          triedFresh = true;
+          this.append("Couldn't reopen this chat's earlier session — continuing in a fresh one, with a summary of the conversation so far.", "note", true);
+          this.session = null;
+          prompt = this.freshPrompt(agentPrompt ?? message);
+          files = attachments;
+          attempt--;
+          continue;
+        }
         if (!isTransientError(err)) {
           this.append("Claude error: " + err, "note", true);
+          // Nothing came back at all: the session itself may be the problem.
+          if (!this.turnOutput && this.session) this.offerRecovery(agentPrompt ?? message);
           break;
         }
         if (attempt >= RETRY_DELAYS_MS.length) {
           this.append(`Claude error: ${err}\nStill can't reach the model after ${attempt} tries. Everything up to step ${this.turnSteps} is kept — press Continue to pick up from there.`, "note", true);
-          this.offerContinue();
+          this.offerContinue(agentPrompt ?? message);
           break;
         }
         this.append(`Connection dropped after step ${this.turnSteps} (${shortError(err)}) — resuming automatically (${attempt + 1}/${RETRY_DELAYS_MS.length})…`, "note", true);
@@ -634,17 +656,48 @@ export class ChatPanel {
     });
   }
 
-  /** The automatic resumes gave up: one button continues the same session. */
-  private offerContinue() {
+  /** The automatic resumes gave up: continue the same session, or (when the
+   *  session itself keeps failing) a fresh one. */
+  private offerContinue(request: string) {
     this.clearOptions();
+    this.addChip("Continue", true, () => void this.send("Continue", CONTINUE_PROMPT));
+    if (this.session) this.addFreshChip(request);
+  }
+
+  /** A turn failed before any output, with a saved session in play: retry
+   *  it, or carry on in a fresh session seeded with the chat so far. */
+  private offerRecovery(request: string) {
+    this.clearOptions();
+    this.addChip("Try again", true, () => void this.send("Try again", request));
+    this.addFreshChip(request);
+  }
+
+  private addFreshChip(request: string) {
+    this.addChip("Continue in a fresh session", false, () => {
+      this.session = null;
+      void this.send("Continue in a fresh session", this.freshPrompt(request));
+    });
+  }
+
+  private addChip(label: string, primary: boolean, run: () => void) {
     const btn = document.createElement("button");
-    btn.className = "opt continue";
-    btn.textContent = "Continue";
-    btn.onclick = () => { this.clearOptions(); void this.send(CONTINUE_PROMPT); };
+    btn.className = primary ? "opt continue" : "opt";
+    btn.textContent = label;
+    btn.onclick = () => { this.clearOptions(); run(); };
     this.optionsEl.appendChild(btn);
   }
 
+  /** The request, prefixed with this chat's questions and answers (minus the
+   *  row that echoes the request itself). */
+  private freshPrompt(request: string): string {
+    const rows = this.entries.map((e) => ({ kind: e.kind, text: e.text }));
+    const lastUser = rows.map((r) => r.kind).lastIndexOf("user");
+    return recapPrompt(lastUser >= 0 ? rows.slice(0, lastUser) : rows, request);
+  }
+
   private handleEvent(e: ChatEvent) {
+    const errorOnly = e.kind === "result" && e.is_error;
+    if (e.kind !== "session" && e.kind !== "done" && e.kind !== "awaiting" && !errorOnly) this.turnOutput = true;
     switch (e.kind) {
       case "session": this.session = e.id; break;
       case "delta":
@@ -703,8 +756,10 @@ export class ChatPanel {
         break;
       case "done":
         if (!this.interrupted && !this.turnError && this.playSounds) beep(660);
-        if (e.stderr && this.transcript.childElementCount === 0) {
-          this.append("Claude exited without output. " + e.stderr, "note", true);
+        // A turn that printed nothing must still say why, or the chat looks
+        // dead: "Thinking…" just vanishes.
+        if (!this.turnOutput && !this.stopped && this.turnError === null) {
+          this.turnError = silentExitMessage(e.stderr, e.code);
         }
         this.onFilesModified();
         break;

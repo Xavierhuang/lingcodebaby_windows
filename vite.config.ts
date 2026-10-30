@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
+import { readFileSync } from "fs";
 
 // package.json has "type": "module", so `__dirname` isn't defined —
 // derive it from import.meta.url for cross-Node-version safety.
@@ -17,8 +18,13 @@ const mockAliases = mock
       .map((find) => ({ find, replacement: mock }))
   : [];
 
+// The app's version, shown in the sidebar footer, Settings and the updater.
+// package.json is bumped in lockstep with tauri.conf.json and Cargo.toml.
+const version = JSON.parse(readFileSync(resolve(__dirname, "package.json"), "utf8")).version;
+
 export default defineConfig({
   clearScreen: false,
+  define: { __APP_VERSION__: JSON.stringify(version) },
   resolve: { alias: mockAliases },
   server: {
     port: 1420,

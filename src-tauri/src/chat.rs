@@ -877,15 +877,22 @@ pub async fn claude_send(
         }
     }
 
-    // Clear / kill the stored child. An empty slot means claude_abort took it.
-    let aborted = {
-        let mut guard = state.child.lock().await;
-        match guard.take() {
+    // Reap the stored child for its exit code (stdout is closed, so it is
+    // exiting). An empty slot means claude_abort took it.
+    let (aborted, exit_code) = {
+        let child = state.child.lock().await.take();
+        match child {
             Some(mut c) => {
-                let _ = c.start_kill();
-                false
+                let code = match tokio::time::timeout(std::time::Duration::from_secs(3), c.wait()).await {
+                    Ok(Ok(status)) => status.code(),
+                    _ => {
+                        let _ = c.start_kill();
+                        None
+                    }
+                };
+                (false, code)
             }
-            None => true,
+            None => (true, None),
         }
     };
 
@@ -893,11 +900,13 @@ pub async fn claude_send(
         // The session started but the CLI died before its result line (a
         // dropped connection the CLI didn't report). Say so in the shape the
         // frontend already resumes from.
-        let _ = on_event.send(json!({
-            "kind": "result",
-            "text": "Connection stopped (stream ended early)",
-            "is_error": true
-        }));
+        let tail = stderr_buf.trim();
+        let text = if tail.is_empty() {
+            "Connection stopped (stream ended early)".to_string()
+        } else {
+            format!("Connection stopped (stream ended early)\n{tail}")
+        };
+        let _ = on_event.send(json!({ "kind": "result", "text": text, "is_error": true }));
     }
 
     if interrupted {
@@ -909,7 +918,7 @@ pub async fn claude_send(
             Some(hint) => format!("{hint}\n\n{}", stderr_buf.trim()),
             None => stderr_buf.trim().to_string(),
         };
-        let _ = on_event.send(json!({ "kind": "done", "stderr": stderr_out }));
+        let _ = on_event.send(json!({ "kind": "done", "stderr": stderr_out, "code": exit_code }));
     }
     Ok(())
 }

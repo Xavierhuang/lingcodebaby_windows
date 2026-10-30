@@ -30,6 +30,7 @@ export function showSettings(state: SettingsState, actions: SettingsActions): Pr
     overlay.innerHTML = `
       <div class="modal settings-sheet">
         <div class="modal-title">Settings</div>
+        <div class="settings-row"><span class="k">Version</span><span>LingCodeBaby ${__APP_VERSION__}</span></div>
         <div class="settings-row"><span class="k">Appearance</span>
           <select class="field appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
         <div class="settings-row"><span class="k">Sounds</span><label><input type="checkbox" class="sounds"/> Chime when Claude finishes or asks</label></div>

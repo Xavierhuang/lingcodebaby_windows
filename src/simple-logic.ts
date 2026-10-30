@@ -101,6 +101,38 @@ export function isTransientError(text: string): boolean {
   return /ECONNRESET|ETIMEDOUT|ECONNREFUSED|EPIPE|socket hang up|connection (stopped|error|reset|closed)|stream ended early|fetch failed|network error|overloaded|\b(429|500|502|503|504|529)\b/i.test(text);
 }
 
+/** The CLI could not reopen the chat's saved session (`--resume <id>`). */
+export function isMissingSession(text: string): boolean {
+  return /No conversation found|session .*not found|could not (find|load|resume) session/i.test(text);
+}
+
+/** What to show for a turn that ended without a single line of output. */
+export function silentExitMessage(stderr: string, code: number | null | undefined): string {
+  const why = stderr.trim() ? stderr.trim().slice(-1500) : "It printed no error.";
+  const how = typeof code === "number" ? `exit code ${code}` : "no exit code";
+  return `Stopped without replying (${how}). ${why}`;
+}
+
+/** A fresh session's first prompt: the chat so far (questions and answers,
+ *  not the steps), newest kept when it is long, then the request. */
+export function recapPrompt(rows: StoredRow[], request: string, budget = 4000): string {
+  const lines: string[] = [];
+  let used = 0;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const r = rows[i];
+    if (r.kind !== "user" && r.kind !== "assistant") continue;
+    const text = r.text.length > 600 ? r.text.slice(0, 600) + "…" : r.text;
+    const line = `${r.kind === "user" ? "User" : "Assistant"}: ${text}`;
+    if (used + line.length > budget) break;
+    lines.unshift(line);
+    used += line.length;
+  }
+  if (!lines.length) return request;
+  return "This chat's earlier session couldn't be reopened, so you are starting fresh. " +
+    "The conversation so far (the files on disk already reflect it):\n\n" + lines.join("\n\n") +
+    "\n\n---\n\n" + request;
+}
+
 /** Legacy `<folder>/.lingcode/chat-baby.json` → the first chat of the new store, or null if empty. */
 export function adoptLegacy(
   doc: { session: string | null; model: string | null; messages: StoredRow[]; adopted_legacy?: boolean } | null,
