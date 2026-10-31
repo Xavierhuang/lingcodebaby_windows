@@ -4,6 +4,7 @@ import {
   deriveTitle, groupByDay, foldTurns, adoptLegacy, paneLayout, outcomeOptions, kindBadge,
   badgeForTarget, nativeRunText, projectRootFor, isTransientError,
   isMissingSession, silentExitMessage, recapPrompt,
+  remoteMessages,
 } from "../simple-logic.ts";
 
 test("a chat's title is its first user message, cut at a word boundary under 60 chars", () => {
@@ -169,4 +170,17 @@ test("a fresh session gets the questions and answers, newest first to survive th
   const tight = recapPrompt(rows, "go", 60);
   assert.ok(tight.includes("newer answer") && !tight.includes("old question"));
   assert.equal(recapPrompt([], "go"), "go");
+});
+
+test("a saved chat becomes the remote page's messages: user, answer, steps as tool lines", () => {
+  const msgs = remoteMessages([
+    { kind: "user", text: "fix the title" },
+    { kind: "tool", text: "🔧 Bash npm run build" },
+    { kind: "edit", text: "✏️ Edit index.html\n- a\n+ b" },
+    { kind: "assistant", text: "Done." },
+  ]) as any[];
+  assert.deepEqual(msgs.map((m) => m.role), ["user", "assistant", "assistant", "assistant"]);
+  assert.deepEqual(msgs[1].content[0], { type: "toolUse", id: "t1", name: "Bash", input: "npm run build", ready: true });
+  assert.equal(msgs[2].content[0].input, "index.html");
+  assert.equal(msgs[3].content[0].text, "Done.");
 });

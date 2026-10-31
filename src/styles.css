@@ -236,7 +236,10 @@ input.field:focus, textarea.field:focus, select.field:focus { outline: none; bor
 .no-project { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 12px; color: var(--text-2); }
 
 /* composer */
-.composer-wrap { flex-shrink: 0; padding: 8px 24px 16px; }
+.composer-wrap { flex-shrink: 0; padding: 8px 24px 16px; position: relative; }
+/* Shown once the reader scrolls up from the bottom of the chat. */
+.jump-latest { position: absolute; left: 50%; bottom: 100%; transform: translate(-50%, -8px); z-index: 2; width: 32px; height: 32px; padding: 0; border-radius: 50%; border: 1px solid var(--border-strong); background: var(--raised); color: var(--text); font-size: 15px; line-height: 1; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+.jump-latest[hidden] { display: none; }
 .composer-inner { max-width: 760px; margin: 0 auto; }
 .composer {
   background: var(--raised); border: 1px solid var(--border); border-radius: var(--radius-composer);

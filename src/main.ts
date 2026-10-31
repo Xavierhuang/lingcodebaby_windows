@@ -216,9 +216,15 @@ function openSettings() { return showSettings(
 ); }
 
 // ---- remote access + "Invite a helper" --------------------------------------
-// remote.ts mirrors the open chat to lingcode.dev/remote; a helper link lets
-// someone else chat with it for two hours.
-const remote = new RemoteHost(chat, () => (folder ? `${baseName(folder)} · ` : "") + "LingCodeBaby chat");
+// remote.ts offers the project's chats to lingcode.dev/remote; a helper link
+// lets someone else chat with them for two hours.
+const remote = new RemoteHost(chat, {
+  project: () => (folder ? baseName(folder) : null),
+  list: async () => (store ? store.list() : []),
+  load: async (id) => (store ? store.load(id) : null),
+  open: (id) => selectChat(id),
+  create: () => newChat(),
+});
 let remoteOn = false;
 let helperTimer: number | undefined;
 
@@ -313,8 +319,9 @@ async function refreshRunStatus() {
 
 // ---- chats -----------------------------------------------------------------
 async function refreshConversations() {
-  if (!store) { conversations.setChats([], null); return; }
+  if (!store) { conversations.setChats([], null); remote.chatsChanged(); return; }
   conversations.setChats(await store.list(), chat.currentChatId());
+  remote.chatsChanged();
 }
 
 async function newChat() {

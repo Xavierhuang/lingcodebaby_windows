@@ -19,13 +19,17 @@ function listDir(path: string) {
   return out.sort((a, b) => Number(b.is_dir) - Number(a.is_dir) || a.name.localeCompare(b.name));
 }
 
+const remotePort = () => new URLSearchParams(location.search).get("mockremote");
+
 export class Channel<T> { onmessage: (m: T) => void = () => {}; }
 
 export async function invoke<T>(cmd: string, args: any = {}): Promise<T> {
   await new Promise((r) => setTimeout(r, 15));
   const a = args as any;
   switch (cmd) {
-    case "get_prefs": return prefs as T;
+    // ?mockremote=<port>: remote access on, talking to a test relay on localhost.
+    case "get_prefs": return (remotePort() ? { ...prefs, remote_access: true } : prefs) as T;
+    case "remote_register": return ({ hostId: "mock-host", name: "mock-pc", wsUrl: `ws://127.0.0.1:${remotePort()}` }) as T;
     case "set_prefs": prefs = a.prefs; return undefined as T;
     case "list_dir": if (!dirs.has(a.path)) throw new Error("no such dir"); return listDir(a.path) as T;
     case "read_text_file": { const v = files.get(a.path); if (v === undefined) throw new Error("no such file"); return v as T; }
@@ -72,7 +76,10 @@ export async function invoke<T>(cmd: string, args: any = {}): Promise<T> {
       say({ kind: "text", text: "Picking up where I left off: editing the paragraph." }, 200);
       say({ kind: "tool", name: "Read", detail: "index.html" }, 300);
       say({ kind: "edit", name: "Edit", input: { file_path: `${FOLDER}/index.html`, old_string: "<p>Hello from the preview.</p>", new_string: "<p>Hello, world.</p>" } }, 700);
-      const answer = "I changed the paragraph to say Hello, world. The preview reloads on its own, so you should see it right away.";
+      // ?mocklong=N: an N-paragraph reply, long enough to scroll while it streams.
+      const longN = Number(new URLSearchParams(location.search).get("mocklong") || 0);
+      const answer = Array.from({ length: Math.max(1, longN) }, (_, i) =>
+        (longN ? `Paragraph ${i + 1}. ` : "") + "I changed the paragraph to say Hello, world. The preview reloads on its own, so you should see it right away.").join("\n\n");
       const words = answer.split(/(?<= )/);
       words.forEach((w, i) => say({ kind: "delta", text: w }, 900 + i * 60));
       const end = 900 + words.length * 60;

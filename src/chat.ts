@@ -1,7 +1,7 @@
 import { claudeSend, ChatEvent, api } from "./api";
 import {
   ChatDoc, foldTurns, outcomeOptions, isTransientError, isMissingSession, silentExitMessage, recapPrompt,
-  CONTINUE_PROMPT, RETRY_DELAYS_MS,
+  CONTINUE_PROMPT, RETRY_DELAYS_MS, remoteMessages,
 } from "./simple-logic";
 import { ChatStore, titleFor } from "./conversations";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -84,6 +84,10 @@ export class ChatPanel {
   private modelSelect: HTMLSelectElement;
   private stepsToggle: HTMLInputElement;
   private scrollEl: HTMLElement;
+  private jumpBtn: HTMLButtonElement;
+  /** Follow new output only while the reader is at the bottom; scrolling up
+   *  to read earlier steps stops the follow until they come back down. */
+  private pinned = true;
   private dotsTimer: number | null = null;
   private thinkingLine: HTMLElement | null = null;
   private thinkStart = 0;
@@ -108,7 +112,7 @@ export class ChatPanel {
         <div class="transcript"></div>
         <div class="options"></div>
       </div></div>
-      <div class="composer-wrap"><div class="composer-inner">
+      <div class="composer-wrap"><button class="jump-latest" title="Jump to latest" hidden>↓</button><div class="composer-inner">
         <div class="composer">
           <div class="attachments"></div>
           <textarea class="chat-input" placeholder="Plan, search, build anything" rows="1"></textarea>
@@ -120,6 +124,7 @@ export class ChatPanel {
         </div>
       </div></div>`;
     this.scrollEl = root.querySelector(".chat-scroll") as HTMLElement;
+    this.jumpBtn = root.querySelector(".jump-latest") as HTMLButtonElement;
     this.emptyEl = root.querySelector(".empty-state") as HTMLElement;
     this.transcript = root.querySelector(".transcript") as HTMLElement;
     this.optionsEl = root.querySelector(".options") as HTMLElement;
@@ -130,6 +135,12 @@ export class ChatPanel {
     this.stepsToggle = root.querySelector(".steps") as HTMLInputElement;
     this.modelSelect.onchange = () => this.onModelChange(this.modelSelect.value);
     this.stepsToggle.onchange = () => this.setShowAllSteps(this.stepsToggle.checked);
+    this.scrollEl.addEventListener("scroll", () => {
+      const gap = this.scrollEl.scrollHeight - this.scrollEl.scrollTop - this.scrollEl.clientHeight;
+      this.pinned = gap < 24;
+      this.jumpBtn.hidden = this.pinned;
+    }, { passive: true });
+    this.jumpBtn.onclick = () => this.scrollToEnd();
 
     // Stop takes Send's place while a turn runs (the Mac's stopInComposer).
     this.sendBtn.onclick = () => {
@@ -244,6 +255,17 @@ export class ChatPanel {
     for (const m of doc.messages) this.restoreRow(m);
     this.applyFolds();
     this.renderEmptyState();
+    this.scrollToEnd();
+  }
+
+  /** Keep the newest output in view, unless the reader scrolled up. */
+  private followEnd() {
+    if (this.pinned) this.scrollEl.scrollTop = this.scrollEl.scrollHeight;
+  }
+
+  private scrollToEnd() {
+    this.pinned = true;
+    this.jumpBtn.hidden = true;
     this.scrollEl.scrollTop = this.scrollEl.scrollHeight;
   }
 
@@ -263,26 +285,7 @@ export class ChatPanel {
   /** The chat in the shape the Mac app sends lingcode.dev/remote
    *  (ClaudeSessionSnapshot): whole state, stable message ids. */
   remoteSnapshot() {
-    const messages = this.entries.map((e, i) => {
-      const id = `m${i}`;
-      switch (e.kind) {
-        case "user": return { id, role: "user", content: [{ type: "text", text: e.text }] };
-        case "thinking": return { id, role: "assistant", content: [{ type: "thinking", text: e.text }] };
-        case "tool": {
-          const line = e.text.replace(/^🔧\s*/, "");
-          const name = line.split(/\s+/)[0] || "Tool";
-          // A string input renders as plain text on lingcode.dev/remote ("→ Bash npm run dev").
-          return { id, role: "assistant", content: [{ type: "toolUse", id: `t${i}`, name, input: line.slice(name.length).trim(), ready: true }] };
-        }
-        case "edit": {
-          const first = e.text.split("\n")[0].replace(/^✏️\s*/, "");
-          const name = first.split(/\s+/)[0] || "Edit";
-          return { id, role: "assistant", content: [{ type: "toolUse", id: `t${i}`, name, input: first.slice(name.length).trim(), ready: true }] };
-        }
-        case "note": return { id, role: "system", content: [{ type: "text", text: e.text }] };
-        default: return { id, role: "assistant", content: [{ type: "text", text: e.text }] };
-      }
-    });
+    const messages = remoteMessages(this.entries);
     const firstUser = this.entries.find((e) => e.kind === "user")?.text ?? "";
     return {
       isStreaming: this.busy,
@@ -433,7 +436,8 @@ export class ChatPanel {
         el.addEventListener("animationend", () => el.classList.remove("pop"), { once: true });
       }
       this.emptyEl.hidden = true;
-      this.scrollEl.scrollTop = this.scrollEl.scrollHeight;
+      // The user's own message always brings the view back down.
+      if (kind === "user") this.scrollToEnd(); else this.followEnd();
     }
     this.onTranscriptChange();
   }
@@ -839,7 +843,7 @@ export class ChatPanel {
     this.liveText += chunk;
     this.liveEl.textContent = this.liveText;
     this.onTranscriptChange();
-    this.scrollEl.scrollTop = this.scrollEl.scrollHeight;
+    this.followEnd();
   }
 
   /** The thinking indicator stays the last row (Mac pins it to the bottom of
@@ -869,7 +873,7 @@ export class ChatPanel {
       const s = Math.floor((Date.now() - this.thinkStart) / 1000);
       const steps = this.turnSteps ? ` · step ${this.turnSteps}` : "";
       label.textContent = (s > 0 ? `Thinking… ${s}s` : "Thinking…") + steps;
-      this.scrollEl.scrollTop = this.scrollEl.scrollHeight;
+      this.followEnd();
     };
     tick();
     this.dotsTimer = window.setInterval(tick, 400);

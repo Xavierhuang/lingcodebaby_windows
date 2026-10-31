@@ -225,3 +225,28 @@ export function projectRootFor(path: string): string {
   const match = /^(.*)[\\/]\.lingcode$/i.exec(trimmed);
   return match && match[1] ? match[1] : path;
 }
+
+/** Chat rows in the shape lingcode.dev/remote renders (the Mac's
+ *  ClaudeSessionSnapshot messages): whole history, stable ids. */
+export function remoteMessages(rows: StoredRow[]) {
+  return rows.map((e, i) => {
+    const id = `m${i}`;
+    switch (e.kind) {
+      case "user": return { id, role: "user", content: [{ type: "text", text: e.text }] };
+      case "thinking": return { id, role: "assistant", content: [{ type: "thinking", text: e.text }] };
+      case "tool": {
+        const line = e.text.replace(/^🔧\s*/, "");
+        const name = line.split(/\s+/)[0] || "Tool";
+        // A string input renders as plain text on lingcode.dev/remote ("→ Bash npm run dev").
+        return { id, role: "assistant", content: [{ type: "toolUse", id: `t${i}`, name, input: line.slice(name.length).trim(), ready: true }] };
+      }
+      case "edit": {
+        const first = e.text.split("\n")[0].replace(/^✏️\s*/, "");
+        const name = first.split(/\s+/)[0] || "Edit";
+        return { id, role: "assistant", content: [{ type: "toolUse", id: `t${i}`, name, input: first.slice(name.length).trim(), ready: true }] };
+      }
+      case "note": return { id, role: "system", content: [{ type: "text", text: e.text }] };
+      default: return { id, role: "assistant", content: [{ type: "text", text: e.text }] };
+    }
+  });
+}
