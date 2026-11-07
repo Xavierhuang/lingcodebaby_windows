@@ -49,6 +49,10 @@ export async function invoke<T>(cmd: string, args: any = {}): Promise<T> {
     case "anthropic_key_present": case "deepseek_key_present": return false as T;
     case "endpoint_get_config": return ({ enabled: false, url: "", key_present: false, model: "", label: "Custom · endpoint" }) as T;
     case "claude_abort": return undefined as T;
+    case "codex_models": return ([
+      { slug: "gpt-6-astra", name: "GPT-6-Astra", description: "Frontier intelligence for the most demanding work.", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"], default_effort: "low" },
+      { slug: "gpt-5.6-sol", name: "GPT-5.6-Sol", description: "Fast and capable for everyday coding.", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"], default_effort: "low" },
+    ]) as T;
     case "claude_send": {
       const ch = a.onEvent as Channel<any>;
       const say = (m: any, ms: number) => setTimeout(() => ch.onmessage(m), ms);

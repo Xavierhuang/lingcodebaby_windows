@@ -46,6 +46,12 @@ pub struct Prefs {
     /// The id lingcode.dev gave this PC, so it re-registers as the same host.
     #[serde(default)]
     pub remote_host_id: String,
+    /// Codex model slug (`codex -m`); empty = whatever Codex itself is set to.
+    #[serde(default)]
+    pub codex_model: String,
+    /// Codex reasoning effort ("low" … "max"); empty = Codex's own setting.
+    #[serde(default)]
+    pub codex_effort: String,
 }
 
 impl Default for Prefs {
@@ -64,6 +70,8 @@ impl Default for Prefs {
             appearance: default_appearance(),
             remote_access: false,
             remote_host_id: String::new(),
+            codex_model: String::new(),
+            codex_effort: String::new(),
         }
     }
 }

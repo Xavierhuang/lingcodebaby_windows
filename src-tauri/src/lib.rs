@@ -378,6 +378,7 @@ pub fn run() {
             codex::codex_status,
             codex::codex_login,
             codex::codex_install,
+            codex::codex_models,
             history::history_load,
             history::history_save,
             history::history_clear,

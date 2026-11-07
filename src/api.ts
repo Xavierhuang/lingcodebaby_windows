@@ -12,6 +12,18 @@ export interface Prefs {
   appearance: string;
   remote_access?: boolean;
   remote_host_id?: string;
+  /** Codex model slug; empty = Codex's own setting (codex.rs). */
+  codex_model?: string;
+  /** Codex reasoning effort; empty = Codex's own setting. */
+  codex_effort?: string;
+}
+/** A model this PC's Codex offers (`codex debug models`). */
+export interface CodexModel {
+  slug: string;
+  name: string;
+  description: string;
+  efforts: string[];
+  default_effort: string;
 }
 /** What Run app starts (src-tauri/src/runapp.rs). */
 export interface RunTarget {
@@ -61,6 +73,7 @@ export const api = {
   codexStatus: () => invoke<string>("codex_status"),
   codexLogin: () => invoke<string>("codex_login"),
   codexInstall: () => invoke<string>("codex_install"),
+  codexModels: () => invoke<CodexModel[]>("codex_models"),
 
   // Per-project chat transcript + attachments under <project>/.lingcode/.
   historyLoad: (folder: string) => invoke<StoredHistory | null>("history_load", { folder }),

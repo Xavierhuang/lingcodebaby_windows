@@ -331,7 +331,13 @@ fn codex_thread(resume: Option<&str>) -> Option<&str> {
     resume.and_then(|r| r.strip_prefix(SESSION_PREFIX)).filter(|r| !r.is_empty())
 }
 
-fn exec_args(thread: Option<&str>) -> Vec<String> {
+/// A model or effort name as Codex spells them (`gpt-6-astra`, `xhigh`);
+/// anything else in prefs.json is ignored rather than passed to the CLI.
+fn is_plain_name(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 80 && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_'))
+}
+
+fn exec_args(thread: Option<&str>, model: &str, effort: &str) -> Vec<String> {
     let mut a: Vec<String> = vec!["exec".into()];
     if thread.is_some() {
         a.push("resume".into());
@@ -339,12 +345,85 @@ fn exec_args(thread: Option<&str>) -> Vec<String> {
     for f in ["--json", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox"] {
         a.push(f.into());
     }
+    // The Settings choice; empty leaves Codex's own config.toml in charge.
+    if is_plain_name(model) {
+        a.push("-m".into());
+        a.push(model.into());
+    }
+    if is_plain_name(effort) {
+        a.push("-c".into());
+        a.push(format!("model_reasoning_effort=\"{effort}\""));
+    }
     if let Some(t) = thread {
         a.push(t.into());
     }
     // The prompt comes on stdin: no length limit, no quoting problems.
     a.push("-".into());
     a
+}
+
+/// One model Codex offers this account, for the Settings picker.
+#[derive(serde::Serialize, Debug, PartialEq)]
+pub struct CodexModel {
+    pub slug: String,
+    pub name: String,
+    pub description: String,
+    pub efforts: Vec<String>,
+    pub default_effort: String,
+}
+
+/// The models `codex debug models` lists for the picker (visibility "list"),
+/// in Codex's own order.
+pub(crate) fn parse_models(json: &str) -> Vec<CodexModel> {
+    let Ok(v) = serde_json::from_str::<Value>(json) else { return Vec::new() };
+    let mut rows: Vec<(i64, CodexModel)> = v
+        .get("models")
+        .and_then(|m| m.as_array())
+        .into_iter()
+        .flatten()
+        .filter(|m| str_of(m, "visibility") == "list" && is_plain_name(str_of(m, "slug")))
+        .map(|m| {
+            let efforts = m
+                .get("supported_reasoning_levels")
+                .and_then(|l| l.as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(|l| l.get("effort").and_then(|e| e.as_str()).or_else(|| l.as_str()))
+                .filter(|e| is_plain_name(e))
+                .map(String::from)
+                .collect();
+            let slug = str_of(m, "slug").to_string();
+            let name = Some(str_of(m, "display_name")).filter(|n| !n.is_empty()).unwrap_or(&slug).to_string();
+            let row = CodexModel {
+                name,
+                description: str_of(m, "description").to_string(),
+                efforts,
+                default_effort: str_of(m, "default_reasoning_level").to_string(),
+                slug,
+            };
+            (m.get("priority").and_then(|p| p.as_i64()).unwrap_or(i64::MAX), row)
+        })
+        .collect();
+    rows.sort_by_key(|(p, _)| *p);
+    rows.into_iter().map(|(_, r)| r).collect()
+}
+
+/// The models this PC's Codex offers, for Settings → Codex.
+#[tauri::command]
+pub async fn codex_models() -> Result<Vec<CodexModel>, String> {
+    let bin = find_codex()?;
+    let mut cmd = std::process::Command::new(&bin);
+    cmd.args(["debug", "models"]).stdin(Stdio::null());
+    hidden(&mut cmd);
+    let out = tokio::process::Command::from(cmd)
+        .output()
+        .await
+        .map_err(|e| format!("Couldn't run codex: {e}"))?;
+    let models = parse_models(&String::from_utf8_lossy(&out.stdout));
+    if models.is_empty() {
+        return Err("Codex didn't list any models. Update it with `npm install -g @openai/codex`.".into());
+    }
+    Ok(models)
 }
 
 #[tauri::command]
@@ -371,9 +450,10 @@ pub async fn codex_send(
     let thread = codex_thread(resume.as_deref());
     let prompt = crate::chat::prompt_with_attachments(&message, &attachments.unwrap_or_default());
 
+    let prefs = crate::prefs::get_prefs();
     let mut std_cmd = std::process::Command::new(&bin);
     std_cmd
-        .args(exec_args(thread))
+        .args(exec_args(thread, &prefs.codex_model, &prefs.codex_effort))
         .env("CODEX_MANAGED_BY_NPM", "1")
         .current_dir(&cwd)
         .stdin(Stdio::piped())
@@ -505,9 +585,32 @@ mod tests {
         assert_eq!(codex_thread(Some("9f1e-claude-session")), None);
         assert_eq!(codex_thread(Some("codex:")), None);
         assert_eq!(codex_thread(None), None);
-        assert_eq!(exec_args(None), ["exec", "--json", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", "-"]);
-        assert_eq!(exec_args(Some("abc"))[..2], ["exec", "resume"]);
-        assert_eq!(exec_args(Some("abc")).last().unwrap(), "-");
+        assert_eq!(exec_args(None, "", ""), ["exec", "--json", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", "-"]);
+        assert_eq!(exec_args(Some("abc"), "", "")[..2], ["exec", "resume"]);
+        assert_eq!(exec_args(Some("abc"), "", "").last().unwrap(), "-");
+    }
+
+    #[test]
+    fn the_settings_choice_reaches_the_cli() {
+        let a = exec_args(Some("t1"), "gpt-6-astra", "xhigh");
+        assert_eq!(a, ["exec", "resume", "--json", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox",
+                       "-m", "gpt-6-astra", "-c", "model_reasoning_effort=\"xhigh\"", "t1", "-"]);
+        // A hand-edited prefs.json can't smuggle arguments in.
+        let b = exec_args(None, "x --yolo", "high; rm");
+        assert!(!b.iter().any(|s| s == "-m" || s == "-c"));
+    }
+
+    #[test]
+    fn the_catalog_becomes_picker_rows() {
+        let json = r#"{"models":[
+          {"slug":"gpt-5.6-sol","display_name":"GPT-5.6-Sol","description":"Fast","default_reasoning_level":"low","supported_reasoning_levels":[{"effort":"low"},{"effort":"high"}],"visibility":"list","priority":3},
+          {"slug":"gpt-reserve","display_name":"GPT-Reserve","visibility":"hide","priority":2},
+          {"slug":"gpt-6-astra","display_name":"GPT-6-Astra","description":"Frontier","default_reasoning_level":"low","supported_reasoning_levels":[{"effort":"low"},{"effort":"max"}],"visibility":"list","priority":1}]}"#;
+        let m = parse_models(json);
+        assert_eq!(m.iter().map(|r| r.slug.as_str()).collect::<Vec<_>>(), ["gpt-6-astra", "gpt-5.6-sol"]);
+        assert_eq!(m[0].efforts, ["low", "max"]);
+        assert_eq!(m[0].name, "GPT-6-Astra");
+        assert!(parse_models("not json").is_empty());
     }
 
     #[test]

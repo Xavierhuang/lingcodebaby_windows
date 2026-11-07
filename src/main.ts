@@ -201,12 +201,15 @@ helperPill.onclick = () => { void stopSharing(); };
 settingsBtn.onclick = () => openSettings();
 function openSettings() { return showSettings(
   { appearance: currentAppearance, playSounds: chat.playSounds, showAllSteps: chat.getShowAllSteps(),
-    remoteAccess: remoteOn, remoteStatus: remote.statusText },
+    remoteAccess: remoteOn, remoteStatus: remote.statusText,
+    codexModel: codexChoice.model, codexEffort: codexChoice.effort },
   {
     onAppearance: (a) => setAppearance(a),
     onSounds: (on) => { chat.playSounds = on; persistPrefs(); },
     onShowAllSteps: (on) => { chat.setShowAllSteps(on); lsSet(LS.steps, on ? "1" : "0"); },
     onRemoteAccess: (on) => { void setRemoteAccess(on); },
+    onCodex: (model, effort) => { void saveCodexChoice(model, effort); },
+    codexModels: () => api.codexModels(),
     anthropicKey: doConfigureAnthropicKey,
     deepseekKey: doConfigureDeepSeekKey,
     customEndpoint: showEndpointSheet,
@@ -487,6 +490,18 @@ function updateTitle() {
   const t = (dirty ? "• " : "") + name + (folder ? " — LingCodeBaby" : "");
   document.title = t;
   getCurrentWindow().setTitle(t).catch(() => {});
+}
+
+// Settings → Codex model / effort, read by codex.rs on every Codex turn.
+const codexChoice = { model: "", effort: "" };
+void api.getPrefs().then((p) => { codexChoice.model = p.codex_model ?? ""; codexChoice.effort = p.codex_effort ?? ""; }, () => {});
+async function saveCodexChoice(model: string, effort: string) {
+  codexChoice.model = model;
+  codexChoice.effort = effort;
+  try {
+    const current = await api.getPrefs();
+    await api.setPrefs({ ...current, codex_model: model, codex_effort: effort });
+  } catch { /* ignore */ }
 }
 
 async function persistPrefs() {
