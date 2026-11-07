@@ -57,6 +57,10 @@ export const api = {
   // Opens a console running `claude login` with the CLI the chat uses (the
   // bundled copy on Windows, which is not on the user's PATH).
   claudeLogin: () => invoke<string>("claude_login"),
+  /** "ready" | "signed_out" | "api_key" | "not_installed" */
+  codexStatus: () => invoke<string>("codex_status"),
+  codexLogin: () => invoke<string>("codex_login"),
+  codexInstall: () => invoke<string>("codex_install"),
 
   // Per-project chat transcript + attachments under <project>/.lingcode/.
   historyLoad: (folder: string) => invoke<StoredHistory | null>("history_load", { folder }),
@@ -135,7 +139,9 @@ export function claudeSend(
 ): Promise<void> {
   const channel = new Channel<ChatEvent>();
   channel.onmessage = onEvent;
-  return invoke<void>("claude_send", { ...args, onEvent: channel });
+  // Codex runs its own CLI (codex.rs) and emits the same events.
+  const command = args.model === "codex" ? "codex_send" : "claude_send";
+  return invoke<void>(command, { ...args, onEvent: channel });
 }
 
 export function deployUpload(

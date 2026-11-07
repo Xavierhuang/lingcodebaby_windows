@@ -1,6 +1,7 @@
 mod anthropic_key;
 mod chat;
 mod claude_bin;
+mod codex;
 mod deepseek_key;
 mod deploy;
 mod endpoint;
@@ -55,6 +56,8 @@ fn build_menu(app: &tauri::AppHandle, prefs: &prefs::Prefs) -> tauri::Result<(Me
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "anthropic_key", "Set Anthropic API Key…", true, None::<&str>)?,
             &MenuItem::with_id(app, "deepseek_key", "Set DeepSeek API Key…", true, None::<&str>)?,
+            &MenuItem::with_id(app, "codex_signin", "Codex: Sign in with ChatGPT…", true, None::<&str>)?,
+            &MenuItem::with_id(app, "codex_install", "Codex: Install Codex…", true, None::<&str>)?,
             &MenuItem::with_id(app, "custom_endpoint", "Custom Endpoint…", true, None::<&str>)?,
             &MenuItem::with_id(app, "sign_out", "Sign Out", true, None::<&str>)?,
             &PredefinedMenuItem::separator(app)?,
@@ -131,6 +134,8 @@ fn build_menu(app: &tauri::AppHandle, prefs: &prefs::Prefs) -> tauri::Result<(Me
         &endpoint::row_label(&prefs.custom_endpoint_url, &prefs.custom_endpoint_model),
     )?;
     m_custom.set_enabled(prefs.use_custom_endpoint)?;
+    // Codex runs the user's own `codex` CLI on their ChatGPT plan (codex.rs).
+    let m_codex = mk_model(codex::TAG, "Codex — your ChatGPT plan")?;
     let model_menu = Submenu::with_items(
         app,
         "Claude Model",
@@ -146,6 +151,7 @@ fn build_menu(app: &tauri::AppHandle, prefs: &prefs::Prefs) -> tauri::Result<(Me
             &m_haiku,
             &m_deepseek_pro,
             &m_deepseek_flash,
+            &m_codex,
             &m_custom,
         ],
     )?;
@@ -239,6 +245,7 @@ fn build_menu(app: &tauri::AppHandle, prefs: &prefs::Prefs) -> tauri::Result<(Me
     models.insert("fable51".to_string(), m_fable51);
     models.insert(deepseek_key::MENU_ROWS[0].0.to_string(), m_deepseek_pro);
     models.insert(deepseek_key::MENU_ROWS[1].0.to_string(), m_deepseek_flash);
+    models.insert(codex::TAG.to_string(), m_codex);
     models.insert(endpoint::TAG.to_string(), m_custom);
 
     let mut appearances = HashMap::new();
@@ -367,6 +374,10 @@ pub fn run() {
             chat::claude_send,
             chat::claude_abort,
             claude_bin::claude_login,
+            codex::codex_send,
+            codex::codex_status,
+            codex::codex_login,
+            codex::codex_install,
             history::history_load,
             history::history_save,
             history::history_clear,

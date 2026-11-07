@@ -34,6 +34,8 @@ export class ChatPanel {
    *  equivalent (taskbar attention). */
   onAskUser: () => void = () => {};
   getModel: () => string = () => "lingmodel";
+  /** Who answers in the transcript: Codex runs its own CLI (codex.rs). */
+  private agentName(): string { return this.getModel() === "codex" ? "Codex" : "Claude"; }
   /** The composer's model picker changed. main.ts persists it. */
   onModelChange: (model: string) => void = () => {};
   /** Empty-state chips that belong to the window, not the chat. */
@@ -612,13 +614,14 @@ export class ChatPanel {
           continue;
         }
         if (!isTransientError(err)) {
-          this.append("Claude error: " + err, "note", true);
+          this.append(`${this.agentName()} error: ${err}`, "note", true);
+          if (this.getModel() === "codex") this.offerCodexSetup(err);
           // Nothing came back at all: the session itself may be the problem.
           if (!this.turnOutput && this.session) this.offerRecovery(agentPrompt ?? message);
           break;
         }
         if (attempt >= RETRY_DELAYS_MS.length) {
-          this.append(`Claude error: ${err}\nStill can't reach the model after ${attempt} tries. Everything up to step ${this.turnSteps} is kept — press Continue to pick up from there.`, "note", true);
+          this.append(`${this.agentName()} error: ${err}\nStill can't reach the model after ${attempt} tries. Everything up to step ${this.turnSteps} is kept — press Continue to pick up from there.`, "note", true);
           this.offerContinue(agentPrompt ?? message);
           break;
         }
@@ -674,6 +677,15 @@ export class ChatPanel {
     this.clearOptions();
     this.addChip("Try again", true, () => void this.send("Try again", request));
     this.addFreshChip(request);
+  }
+
+  /** Codex isn't installed or signed in: one click opens the console for it. */
+  private offerCodexSetup(err: string) {
+    if (/isn't installed/.test(err)) {
+      this.addChip("Install Codex", true, () => void api.codexInstall().then(alertDialog, (e) => alertDialog(String(e))));
+    } else if (/isn't signed in|API key/.test(err)) {
+      this.addChip("Sign in with ChatGPT", true, () => void api.codexLogin().then(alertDialog, (e) => alertDialog(String(e))));
+    }
   }
 
   private addFreshChip(request: string) {
@@ -751,7 +763,7 @@ export class ChatPanel {
         const tail = this.entries[this.entries.length - 1];
         const promote = !!tail && tail.kind === "status" && tail.text.trim() === answer.trim();
         if (promote) { tail.el.remove(); this.entries.pop(); }
-        if (answer.trim()) this.append(answer, "assistant", true, "Claude", true, !promote && answer.trim() !== last);
+        if (answer.trim()) this.append(answer, "assistant", true, this.agentName(), true, !promote && answer.trim() !== last);
         this.onFilesModified();
         break;
       }
@@ -792,7 +804,7 @@ export class ChatPanel {
   }
 
   private showOptions(question: string, options: string[]) {
-    this.append(question, "assistant", true, "Claude");
+    this.append(question, "assistant", true, this.agentName());
     this.clearOptions();
     this.pendingQuestion = { question, options };
     for (const opt of options) {

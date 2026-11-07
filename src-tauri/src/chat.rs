@@ -543,7 +543,7 @@ mod model_tests {
 /// own Read tool rather than us inlining bytes, so a 5 MB screenshot costs one
 /// tool call instead of a giant prompt. Verbatim wording from
 /// LCBClaudeAdapter.m:275-280 so both platforms behave identically.
-fn prompt_with_attachments(base: &str, attachments: &[String]) -> String {
+pub(crate) fn prompt_with_attachments(base: &str, attachments: &[String]) -> String {
     if attachments.is_empty() {
         return base.to_string();
     }

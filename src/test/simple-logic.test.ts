@@ -184,3 +184,11 @@ test("a saved chat becomes the remote page's messages: user, answer, steps as to
   assert.equal(msgs[2].content[0].input, "index.html");
   assert.equal(msgs[3].content[0].text, "Done.");
 });
+
+test("Codex sits under More models, and a Claude-only chat restarts with a recap", () => {
+  const groups = outcomeOptions({ lingmodel: "LingModel", opus55: "Opus 5.5", codex: "Codex (ChatGPT)" });
+  assert.deepEqual(groups[1], { label: "More models", options: [{ value: "codex", label: "Codex (ChatGPT)" }] });
+  // codex.rs answers a chat whose session belongs to Claude with this, so the
+  // panel carries on in a fresh session seeded with the conversation.
+  assert.ok(isMissingSession("No conversation found for Codex in this chat (it was with Claude)."));
+});

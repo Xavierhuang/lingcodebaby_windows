@@ -65,6 +65,7 @@ const MODEL_NAMES: Record<string, string> = {
   lingmodel: "LingModel", default: "Default", opus: "Opus", opus55: "Opus 5.5", sonnet: "Sonnet",
   fable51: "Fable 5.1", fable: "Fable", haiku: "Haiku",
   "deepseek-v4-pro": "DeepSeek V4 Pro", "deepseek-v4-flash": "DeepSeek V4 Flash",
+  codex: "Codex (ChatGPT)",
 };
 
 const conversations = new ConversationsPane(conversationsEl);
@@ -547,6 +548,34 @@ async function doConfigureDeepSeekKey() {
   }
 }
 
+// Codex uses the user's own `codex` CLI, signed in with ChatGPT (codex.rs).
+async function doCodexSignIn() {
+  try {
+    const status = await api.codexStatus();
+    if (status === "not_installed") return doCodexInstall();
+    if (status === "ready") {
+      await alertDialog("Codex is already signed in with ChatGPT. Pick Codex (ChatGPT) in the model menu to use it.");
+      return;
+    }
+    await alertDialog(await api.codexLogin());
+  } catch (e) {
+    await alertDialog("Couldn't start Codex sign-in: " + String(e));
+  }
+}
+
+async function doCodexInstall() {
+  const ok = await confirmDialog(
+    "Install Codex?\n\nThis opens a console and runs `npm install -g @openai/codex` (Node.js required). " +
+      "Codex then uses your own ChatGPT plan, never an API key."
+  );
+  if (!ok) return;
+  try {
+    await alertDialog(await api.codexInstall());
+  } catch (e) {
+    await alertDialog("Couldn't start the install: " + String(e));
+  }
+}
+
 // Sign out of the LingCode account (LingModel + Cloud deploy share the token).
 // If that leaves nothing configured, re-show the onboarding gate so the app
 // isn't usable signed out. Mirrors Mac AppDelegate.signOut:.
@@ -594,6 +623,8 @@ listen<string>("menu", async (ev) => {
     case "custom_endpoint": await showEndpointSheet(); break;
     case "anthropic_key": await doConfigureAnthropicKey(); break;
     case "deepseek_key": await doConfigureDeepSeekKey(); break;
+    case "codex_signin": await doCodexSignIn(); break;
+    case "codex_install": await doCodexInstall(); break;
     case "welcome": await showOnboarding(false); break;
     case "find": panel.select("files"); editor.openFind(); break;
     case "find_next": editor.findNext(); break;
