@@ -121,7 +121,8 @@ fn build_menu(app: &tauri::AppHandle, prefs: &prefs::Prefs) -> tauri::Result<(Me
     // >= 2.1.251 — Baby runs whatever is installed rather than bundling one, so
     // on an older CLI the API rejects it with claude_code_version_too_old;
     // chat.rs turns that into a readable hint. Fable 5 has no floor.
-    let m_fable51 = mk_model("fable51", "Fable 5.1 — Claude 5.1, most capable")?;
+    let m_fable52 = mk_model("fable52", "Fable 5.2 — Claude 5.2, most capable")?;
+    let m_fable51 = mk_model("fable51", "Fable 5.1 — previous Fable")?;
     let m_fable = mk_model("fable", "Fable — Claude 5, fast")?;
     let m_haiku = mk_model("haiku", "Haiku — fastest, lowest cost")?;
     // DeepSeek rows run the same CLI against DeepSeek's endpoint (deepseek_key).
@@ -146,6 +147,7 @@ fn build_menu(app: &tauri::AppHandle, prefs: &prefs::Prefs) -> tauri::Result<(Me
             &m_opus,
             &m_opus55,
             &m_sonnet,
+            &m_fable52,
             &m_fable51,
             &m_fable,
             &m_haiku,
@@ -242,6 +244,7 @@ fn build_menu(app: &tauri::AppHandle, prefs: &prefs::Prefs) -> tauri::Result<(Me
     models.insert("fable".to_string(), m_fable);
     models.insert("haiku".to_string(), m_haiku);
     models.insert("opus55".to_string(), m_opus55);
+    models.insert("fable52".to_string(), m_fable52);
     models.insert("fable51".to_string(), m_fable51);
     models.insert(deepseek_key::MENU_ROWS[0].0.to_string(), m_deepseek_pro);
     models.insert(deepseek_key::MENU_ROWS[1].0.to_string(), m_deepseek_flash);

@@ -63,7 +63,7 @@ const panelDivider = el<HTMLElement>(".pane-divider.drag");
 let currentModel = "lingmodel";
 const MODEL_NAMES: Record<string, string> = {
   lingmodel: "LingModel", default: "Default", opus: "Opus", opus55: "Opus 5.5", sonnet: "Sonnet",
-  fable51: "Fable 5.1", fable: "Fable", haiku: "Haiku",
+  fable52: "Fable 5.2", fable51: "Fable 5.1", fable: "Fable", haiku: "Haiku",
   "deepseek-v4-pro": "DeepSeek V4 Pro", "deepseek-v4-flash": "DeepSeek V4 Flash",
   codex: "Codex (ChatGPT)",
 };

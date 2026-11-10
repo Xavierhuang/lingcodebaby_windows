@@ -80,7 +80,7 @@ jobs:
       # Claude Code CLI shipped inside the Windows installers (npm platform
       # package @anthropic-ai/claude-agent-sdk-win32-<arch>). Bump to ship a
       # newer CLI; see src-tauri/binaries/claude/README.md.
-      CLAUDE_SDK_VERSION: "0.3.282"
+      CLAUDE_SDK_VERSION: "0.3.321"
     strategy:
       fail-fast: false
       matrix:
